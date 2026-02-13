@@ -1,0 +1,52 @@
+# GPU 区域配置 (仅包含支持 G5/G6/G6e 的区域)
+# AMI: Ubuntu 24.04 Noble (hvm-ssd-gp3, amd64) - 2026-02-03
+regions:
+  - region: ap-south-1
+    priority: 1
+    key_name: gpu-key-ap-south-1
+    ami_id: ami-09b041abcb4daa286
+    azs:
+      - az_name: ap-south-1a
+        # GPU支持: G5, G6
+        subnets:
+          - subnet-0fafe7b88481648c2
+      - az_name: ap-south-1b
+        # GPU支持: G5, G6
+        subnets:
+          - subnet-0fdc362c71fee6a90
+
+  - region: ap-northeast-1
+    priority: 2
+    key_name: gpu-key-ap-northeast-1
+    ami_id: ami-025ece6a3a0e7558f
+    azs:
+      - az_name: ap-northeast-1a
+        # GPU支持: G5, G6, G6e
+        subnets:
+          - subnet-0c82087f981728760
+      - az_name: ap-northeast-1c
+        # GPU支持: G5, G6, G6e
+        subnets:
+          - subnet-0e6a62f0ccf5bb61c
+
+  - region: ap-northeast-2
+    priority: 3
+    key_name: gpu-key-ap-northeast-2
+    ami_id: ami-096dce0fcb85a808f
+    azs:
+      - az_name: ap-northeast-2a
+        # GPU支持: G5, G6, G6e
+        subnets:
+          - subnet-0f1d8a48782760941
+      - az_name: ap-northeast-2b
+        # GPU支持: G6e
+        subnets:
+          - subnet-0aa50ba86188517e4
+      - az_name: ap-northeast-2c
+        # GPU支持: G5, G6
+        subnets:
+          - subnet-05096f6da5bf7fc49
+      - az_name: ap-northeast-2d
+        # GPU支持: G5, G6
+        subnets:
+          - subnet-0e2f1c083e042f96f

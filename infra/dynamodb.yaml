@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  DynamoDB table for GPU Cross-Region Dynamic Scheduler.
+  Stores launched instance records with PK=request_id, SK=region#instance_id.
+  Requirement: 5.2
+
+Parameters:
+  TableName:
+    Type: String
+    Default: GpuProvisioningInstances
+    Description: Name of the DynamoDB table.
+
+  BillingMode:
+    Type: String
+    Default: PAY_PER_REQUEST
+    AllowedValues:
+      - PAY_PER_REQUEST
+      - PROVISIONED
+    Description: Billing mode (on-demand or provisioned).
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment tag.
+
+Resources:
+  GpuProvisioningInstancesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: !Ref BillingMode
+      KeySchema:
+        - AttributeName: request_id
+          KeyType: HASH
+        - AttributeName: region_instance_id
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: request_id
+          AttributeType: S
+        - AttributeName: region_instance_id
+          AttributeType: S
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: gpu-cross-region-scheduler
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  TableName:
+    Description: DynamoDB table name
+    Value: !Ref GpuProvisioningInstancesTable
+  TableArn:
+    Description: DynamoDB table ARN
+    Value: !GetAtt GpuProvisioningInstancesTable.Arn

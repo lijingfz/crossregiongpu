@@ -1,0 +1,27 @@
+# GPU Cross-Region Scheduler — prod environment
+# Requirement: 8.4 (dynamic config without redeployment)
+
+stack_name: gpu-scheduler-prod
+dynamodb_table: GpuProvisioningInstances-prod
+ssm_parameter: /gpu-scheduler/prod/regions
+
+# Agent settings
+bedrock_model_id: us.anthropic.claude-sonnet-4-20250514-v1:0
+bedrock_region: us-west-2
+max_tokens: 4096
+
+# Orchestrator defaults
+batch_max: 4
+max_attempts_per_subnet: 3
+global_timeout_seconds: 3600
+
+# Approval thresholds (Requirement 9)
+approval:
+  batch_threshold: 10
+  allowed_geo_regions:
+    - ap-south-1
+    - ap-northeast-1
+    - ap-northeast-2
+
+# Logging
+log_level: WARNING
