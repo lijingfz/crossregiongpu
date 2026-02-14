@@ -88,6 +88,153 @@ def create_agent(
 
 
 # ---------------------------------------------------------------------------
+# build_agent: reusable Agent construction (Requirements 1.1, 1.2, 1.3, 1.4)
+# ---------------------------------------------------------------------------
+
+def build_agent(
+    *,
+    env: str | None = None,
+    env_config_path: str | None = None,
+    ssm_parameter: str | None = None,
+    dynamodb_table: str | None = None,
+    bedrock_model_id: str | None = None,
+    bedrock_region: str | None = None,
+) -> Agent:
+    """Build a fully configured Scheduler Agent instance.
+
+    Parameter priority: explicit arguments > environment variables >
+    environment config file defaults.
+
+    Requirements: 1.1, 1.2, 1.3, 1.4
+    """
+    import os
+
+    import yaml
+
+    from src.agent.approval import ApprovalConfig, ApprovalHook
+    from src.config.loader import ConfigLoader
+
+    # --- Resolve environment name ---
+    env = env or os.environ.get("SCHEDULER_ENV", "dev")
+
+    # --- Load environment config file ---
+    env_config_path = env_config_path or f"config/environments/{env}.yaml"
+    try:
+        with open(env_config_path, "r", encoding="utf-8") as f:
+            env_cfg = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        env_cfg = {}
+
+    # --- Resolve parameters: explicit > env var > config file default ---
+    ssm_parameter = (
+        ssm_parameter
+        or os.environ.get("SSM_PARAMETER")
+        or env_cfg.get("ssm_parameter", f"/gpu-scheduler/{env}/regions")
+    )
+    dynamodb_table = (
+        dynamodb_table
+        or os.environ.get("DYNAMODB_TABLE")
+        or env_cfg.get("dynamodb_table", f"GpuProvisioningInstances-{env}")
+    )
+    bedrock_model_id = (
+        bedrock_model_id
+        or os.environ.get("BEDROCK_MODEL_ID")
+        or env_cfg.get("bedrock_model_id", DEFAULT_MODEL_ID)
+    )
+    bedrock_region = (
+        bedrock_region
+        or os.environ.get("BEDROCK_REGION")
+        or env_cfg.get("bedrock_region", DEFAULT_REGION)
+    )
+
+    max_tokens = env_cfg.get("max_tokens", DEFAULT_MAX_TOKENS)
+
+    # --- Load region config from SSM or local fallback ---
+    try:
+        loader = ConfigLoader.from_ssm(ssm_parameter)
+        logger.info("Regions loaded from SSM: %s", ssm_parameter)
+    except Exception:
+        loader = ConfigLoader.from_yaml("config/regions.yaml")
+        logger.info("Regions loaded from local YAML (SSM unavailable)")
+
+    regions = loader.regions
+
+    # --- Build context block for system prompt ---
+    ddb_region = bedrock_region
+    batch_max = env_cfg.get("batch_max", 4)
+
+    region_lines = []
+    for r in regions:
+        subnets = []
+        for az in r.azs:
+            for s in az.subnets:
+                subnets.append(f"{az.az_name}:{s}")
+        region_lines.append(
+            f"  - {r.region} (priority={r.priority}, ami={r.ami_id}, "
+            f"key={r.key_name}, subnets=[{', '.join(subnets)}])"
+        )
+
+    config_context = (
+        "\n\n## Pre-loaded Configuration (use these values directly, "
+        "do NOT ask the user)\n\n"
+        f"DynamoDB table: {dynamodb_table}\n"
+        f"DynamoDB region: {ddb_region}\n"
+        f"Batch max: {batch_max}\n"
+        f"Environment: {env}\n"
+        "Candidate regions with AMI, Key, and Subnets:\n"
+        + "\n".join(region_lines)
+    )
+
+    # Add fallback group info to context
+    if loader.fallback_groups:
+        group_lines = ["\n\nGeographic Compliance Fallback Groups:"]
+        for group in loader.fallback_groups:
+            group_lines.append(
+                f"  - Consumer regions {group.consumer_regions} "
+                f"→ allowed fallback: {group.fallback_regions}"
+            )
+        group_lines.append(
+            f"  - Allowed consumer regions: {sorted(loader.all_consumer_regions)}"
+        )
+        group_lines.append(
+            "  - Requests from regions NOT in any group above MUST be rejected."
+        )
+        config_context += "\n".join(group_lines)
+
+    config_context += (
+        "\n\nWhen launching instances, automatically use the ami_id, key_name, "
+        "and subnets from the region config above. Generate a unique request_id "
+        "for each scheduling run. Use security_group_ids=[] (empty) unless the "
+        "user specifies otherwise.\n"
+        "When querying GPU history, use dynamodb_query_instances to check DynamoDB records.\n"
+        "When deleting instances, always pass dynamodb_table and dynamodb_region "
+        "to ec2_delete_instances so DynamoDB records are updated to 'terminated'."
+    )
+
+    full_system_prompt = SYSTEM_PROMPT + config_context
+
+    # --- Build approval hook ---
+    approval_cfg = env_cfg.get("approval", {})
+    approval_hook = ApprovalHook(
+        config=ApprovalConfig(
+            batch_threshold=approval_cfg.get("batch_threshold", 20),
+            allowed_geo_regions=set(approval_cfg.get("allowed_geo_regions", [])),
+        )
+    )
+
+    # --- Create agent ---
+    agent = create_agent(
+        model_id=bedrock_model_id,
+        region_name=bedrock_region,
+        max_tokens=max_tokens,
+        hooks=[approval_hook],
+        system_prompt=full_system_prompt,
+    )
+
+    return agent
+
+
+# ---------------------------------------------------------------------------
 # Structured output helpers
 # ---------------------------------------------------------------------------
 
@@ -162,111 +309,22 @@ def main() -> None:
     """Interactive CLI entry point for the GPU scheduling agent."""
     import sys
 
-    import yaml
-
-    from src.agent.approval import ApprovalConfig, ApprovalHook
-    from src.config.loader import ConfigLoader
-
-    # --- Load environment config ---
+    # --- Determine environment ---
     env = sys.argv[1] if len(sys.argv) > 1 else "dev"
     env_config_path = f"config/environments/{env}.yaml"
 
+    print(f"[gpu-scheduler] Environment: {env}")
+
+    # --- Build agent using shared logic ---
     try:
-        with open(env_config_path, "r", encoding="utf-8") as f:
-            env_cfg = yaml.safe_load(f)
-    except FileNotFoundError:
-        print(f"[error] Environment config not found: {env_config_path}")
+        agent = build_agent(env=env, env_config_path=env_config_path)
+    except Exception as exc:
+        print(f"[error] Failed to build agent: {exc}")
         sys.exit(1)
 
-    print(f"[gpu-scheduler] Environment: {env}")
-    print(f"[gpu-scheduler] Model: {env_cfg.get('bedrock_model_id', DEFAULT_MODEL_ID)}")
-    print(f"[gpu-scheduler] Bedrock region: {env_cfg.get('bedrock_region', DEFAULT_REGION)}")
-
-    # --- Load region config from SSM or local fallback ---
-    ssm_param = env_cfg.get("ssm_parameter", f"/gpu-scheduler/{env}/regions")
-    try:
-        loader = ConfigLoader.from_ssm(ssm_param)
-        print(f"[gpu-scheduler] Regions loaded from SSM: {ssm_param}")
-    except Exception:
-        loader = ConfigLoader.from_yaml("config/regions.yaml")
-        print("[gpu-scheduler] Regions loaded from local YAML (SSM unavailable)")
-
-    regions = loader.regions
-    print(f"[gpu-scheduler] Candidate regions: {[r.region for r in regions]}")
-
-    # --- Build context block for system prompt ---
-    ddb_table = env_cfg.get("dynamodb_table", f"GpuProvisioningInstances-{env}")
-    ddb_region = env_cfg.get("bedrock_region", DEFAULT_REGION)
-    batch_max = env_cfg.get("batch_max", 4)
-
-    region_lines = []
-    for r in regions:
-        subnets = []
-        for az in r.azs:
-            for s in az.subnets:
-                subnets.append(f"{az.az_name}:{s}")
-        region_lines.append(
-            f"  - {r.region} (priority={r.priority}, ami={r.ami_id}, "
-            f"key={r.key_name}, subnets=[{', '.join(subnets)}])"
-        )
-
-    config_context = (
-        "\n\n## Pre-loaded Configuration (use these values directly, "
-        "do NOT ask the user)\n\n"
-        f"DynamoDB table: {ddb_table}\n"
-        f"DynamoDB region: {ddb_region}\n"
-        f"Batch max: {batch_max}\n"
-        f"Environment: {env}\n"
-        "Candidate regions with AMI, Key, and Subnets:\n"
-        + "\n".join(region_lines)
-    )
-
-    # Add fallback group info to context
-    if loader.fallback_groups:
-        group_lines = ["\n\nGeographic Compliance Fallback Groups:"]
-        for group in loader.fallback_groups:
-            group_lines.append(
-                f"  - Consumer regions {group.consumer_regions} "
-                f"→ allowed fallback: {group.fallback_regions}"
-            )
-        group_lines.append(
-            f"  - Allowed consumer regions: {sorted(loader.all_consumer_regions)}"
-        )
-        group_lines.append(
-            "  - Requests from regions NOT in any group above MUST be rejected."
-        )
-        config_context += "\n".join(group_lines)
-
-    config_context += (
-        "\n\nWhen launching instances, automatically use the ami_id, key_name, "
-        "and subnets from the region config above. Generate a unique request_id "
-        "for each scheduling run. Use security_group_ids=[] (empty) unless the "
-        "user specifies otherwise.\n"
-        "When querying GPU history, use dynamodb_query_instances to check DynamoDB records.\n"
-        "When deleting instances, always pass dynamodb_table and dynamodb_region "
-        "to ec2_delete_instances so DynamoDB records are updated to 'terminated'."
-    )
-
-    full_system_prompt = SYSTEM_PROMPT + config_context
-
-    # --- Build approval hook ---
-    approval_cfg = env_cfg.get("approval", {})
-    approval_hook = ApprovalHook(
-        config=ApprovalConfig(
-            batch_threshold=approval_cfg.get("batch_threshold", 20),
-            allowed_geo_regions=set(approval_cfg.get("allowed_geo_regions", [])),
-        )
-    )
-
-    # --- Create agent ---
-    agent = create_agent(
-        model_id=env_cfg.get("bedrock_model_id", DEFAULT_MODEL_ID),
-        region_name=env_cfg.get("bedrock_region", DEFAULT_REGION),
-        max_tokens=env_cfg.get("max_tokens", DEFAULT_MAX_TOKENS),
-        hooks=[approval_hook],
-        system_prompt=full_system_prompt,
-    )
-
+    # Print config info from the agent
+    model = agent.model
+    print(f"[gpu-scheduler] Model: {getattr(model, 'model_id', 'unknown')}")
     print("[gpu-scheduler] Agent ready. Type your scheduling request (Ctrl+C to exit).")
     print()
 
@@ -277,14 +335,12 @@ def main() -> None:
             sys.stdout.write(prompt)
             sys.stdout.flush()
         try:
-            # Try reading with explicit UTF-8 handling
             if hasattr(sys.stdin, "buffer"):
                 line = sys.stdin.buffer.readline()
                 return line.decode("utf-8", errors="replace").strip()
             else:
                 return input().strip()
         except UnicodeDecodeError:
-            # Fallback: read raw bytes and decode with error handling
             if hasattr(sys.stdin, "buffer"):
                 line = sys.stdin.buffer.readline()
                 return line.decode("utf-8", errors="replace").strip()

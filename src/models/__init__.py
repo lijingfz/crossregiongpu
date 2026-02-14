@@ -1,5 +1,10 @@
 """Public API for data models."""
 
+from src.models.responses import (
+    AgentResponse,
+    ConversationRecord,
+    InterruptInfo,
+)
 from src.models.schemas import (
     AZConfig,
     DeleteResult,
@@ -15,11 +20,14 @@ from src.models.schemas import (
 )
 
 __all__ = [
+    "AgentResponse",
     "AZConfig",
+    "ConversationRecord",
     "DeleteResult",
     "FilterSet",
     "InstanceInfo",
     "InstanceSummary",
+    "InterruptInfo",
     "NextAction",
     "Plan",
     "PlanStep",

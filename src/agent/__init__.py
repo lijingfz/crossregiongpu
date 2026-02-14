@@ -3,6 +3,7 @@
 from src.agent.approval import ApprovalConfig, ApprovalHook
 from src.agent.main import (
     ALL_TOOLS,
+    build_agent,
     create_agent,
     decide_next_action,
     generate_plan,
@@ -40,6 +41,7 @@ __all__ = [
     "append_decision",
     "append_instances",
     "append_result",
+    "build_agent",
     "create_agent",
     "decide_next_action",
     "generate_plan",
