@@ -108,6 +108,20 @@ class RegionConfig(BaseModel):
     ami_id: str = ""        # AMI ID (Region-specific)
 
 
+class FallbackGroup(BaseModel):
+    """Geographic compliance fallback group.
+
+    Defines which consumer_regions map to which fallback_regions.
+    A consumer_region can only launch instances within its group's
+    fallback_regions. Requests from regions not in any group are rejected.
+    """
+
+    consumer_regions: List[str]
+    fallback_regions: List[str]
+
+
+
+
 # ---------------------------------------------------------------------------
 # FilterSet, InstanceSummary, TerminatedInstance, DeleteResult
 # (Requirement 3.1, 3.2, 3.3)

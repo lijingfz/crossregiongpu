@@ -91,10 +91,12 @@ def get_region_order(
 ) -> list:
     """Return candidate regions sorted by geographic distance to *primary_region*.
 
-    1. Load the candidate whitelist from config (YAML or SSM).
-    2. Compute great-circle distance from *primary_region* to each candidate.
-    3. Place *primary_region* first (distance=0), then sort the rest ascending.
-    4. Regions not in the whitelist are excluded.
+    Enforces geographic compliance via fallback_groups:
+    1. If primary_region is not in any fallback group, returns an error dict
+       (the request should be rejected).
+    2. Only regions within the same fallback group are included.
+    3. Within the allowed set, sorts by great-circle distance.
+    4. primary_region is placed first (distance=0).
     """
     if ssm_parameter:
         loader = ConfigLoader.from_ssm(ssm_parameter)
@@ -102,7 +104,19 @@ def get_region_order(
         path = Path(config_path) if config_path else _DEFAULT_CONFIG_PATH
         loader = ConfigLoader.from_yaml(path)
 
+    # Enforce fallback group boundary
+    try:
+        allowed_regions = loader.get_allowed_regions(primary_region)
+    except ValueError as exc:
+        return {"error": str(exc), "allowed_consumer_regions": sorted(loader.all_consumer_regions)}
+
+    allowed_set = set(allowed_regions) if allowed_regions is not None else None
+
     whitelist = {rc.region for rc in loader.regions}
+    # Intersect with fallback group if configured
+    if allowed_set is not None:
+        whitelist = whitelist & allowed_set
+
     origin = REGION_COORDINATES.get(primary_region)
 
     if origin is None:
@@ -117,7 +131,6 @@ def get_region_order(
             continue  # will be prepended
         coords = REGION_COORDINATES.get(region_name)
         if coords is None:
-            # No coordinates known — put at the end with a large distance
             scored.append((float("inf"), region_name))
         else:
             dist = _haversine_km(origin[0], origin[1], coords[0], coords[1])

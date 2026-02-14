@@ -42,6 +42,10 @@ locals {
       "ap-northeast-1a" = "10.1.2.0/24"
       "ap-northeast-1c" = "10.1.3.0/24"
     }
+    osaka = {
+      "ap-northeast-3a" = "10.2.2.0/24"
+      "ap-northeast-3c" = "10.2.3.0/24"
+    }
     mumbai = {
       "ap-south-1a" = "10.3.2.0/24"
       "ap-south-1b" = "10.3.3.0/24"
@@ -147,6 +151,17 @@ resource "aws_subnet" "tokyo_gpu" {
   availability_zone       = each.key
   map_public_ip_on_launch = true
   tags                    = { Name = "crossregiongpu-gpu-subnet-tokyo-${each.key}" }
+}
+
+# 大阪 GPU子网
+resource "aws_subnet" "osaka_gpu" {
+  for_each                = local.gpu_subnets.osaka
+  provider                = aws.osaka
+  vpc_id                  = aws_vpc.osaka.id
+  cidr_block              = each.value
+  availability_zone       = each.key
+  map_public_ip_on_launch = true
+  tags                    = { Name = "crossregiongpu-gpu-subnet-osaka-${each.key}" }
 }
 
 # 孟买 GPU子网
@@ -520,6 +535,13 @@ resource "aws_route_table_association" "tokyo_gpu" {
   provider       = aws.tokyo
   subnet_id      = each.value.id
   route_table_id = aws_route_table.tokyo.id
+}
+
+resource "aws_route_table_association" "osaka_gpu" {
+  for_each       = aws_subnet.osaka_gpu
+  provider       = aws.osaka
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.osaka.id
 }
 
 resource "aws_route_table_association" "mumbai_gpu" {

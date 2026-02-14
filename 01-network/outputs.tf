@@ -21,6 +21,7 @@ output "subnet_ids" {
 output "gpu_subnet_ids" {
   value = {
     tokyo  = { for az, subnet in aws_subnet.tokyo_gpu : az => subnet.id }
+    osaka  = { for az, subnet in aws_subnet.osaka_gpu : az => subnet.id }
     mumbai = { for az, subnet in aws_subnet.mumbai_gpu : az => subnet.id }
     seoul  = { for az, subnet in aws_subnet.seoul_gpu : az => subnet.id }
   }

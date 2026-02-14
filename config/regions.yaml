@@ -1,5 +1,34 @@
 # GPU 区域配置 (仅包含支持 G5/G6/G6e 的区域)
 # AMI: Ubuntu 24.04 Noble (hvm-ssd-gp3, amd64) - 2026-02-03
+#
+# fallback_groups 定义地理合规回退边界：
+#   - 每个 consumer_region 只能在其所属 group 的 regions 内回退
+#   - 不在任何 group 中的 consumer_region 请求会被直接拒绝
+#
+# 示例：
+#   用户请求 ap-southeast-1 (新加坡) → 可回退到 southeast_asia 组的所有 region
+#   用户请求 ap-northeast-1 (东京)   → 只能在 japan 组内回退 (东京+大阪)
+#   用户请求 us-west-2 (美西)        → 不在任何组中，直接拒绝
+
+fallback_groups:
+  southeast_asia:
+    # 东南亚区域：新加坡为主，可回退到印度、日本、韩国
+    consumer_regions:
+      - ap-southeast-1
+    fallback_regions:
+      - ap-south-1
+      - ap-northeast-1
+      - ap-northeast-2
+
+  japan:
+    # 日本区域：合规要求数据不出境，仅限日本境内
+    consumer_regions:
+      - ap-northeast-1
+      - ap-northeast-3
+    fallback_regions:
+      - ap-northeast-1
+      - ap-northeast-3
+
 regions:
   - region: ap-south-1
     priority: 1
@@ -28,6 +57,21 @@ regions:
         # GPU支持: G5, G6, G6e
         subnets:
           - subnet-0e6a62f0ccf5bb61c
+
+  - region: ap-northeast-3
+    priority: 2
+    key_name: gpu-key-ap-northeast-3
+    ami_id: ami-07b94771f9a4ca794
+    # TODO: terraform apply 后替换为真实 subnet ID 和 AMI ID
+    azs:
+      - az_name: ap-northeast-3a
+        # GPU支持: G5, G6
+        subnets:
+          - subnet-0a5b5a20837010a32
+      - az_name: ap-northeast-3c
+        # GPU支持: G5, G6
+        subnets:
+          - subnet-0fd0f1220660684d1
 
   - region: ap-northeast-2
     priority: 3

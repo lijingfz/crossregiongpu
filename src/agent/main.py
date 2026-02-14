@@ -219,7 +219,26 @@ def main() -> None:
         f"Environment: {env}\n"
         "Candidate regions with AMI, Key, and Subnets:\n"
         + "\n".join(region_lines)
-        + "\n\nWhen launching instances, automatically use the ami_id, key_name, "
+    )
+
+    # Add fallback group info to context
+    if loader.fallback_groups:
+        group_lines = ["\n\nGeographic Compliance Fallback Groups:"]
+        for group in loader.fallback_groups:
+            group_lines.append(
+                f"  - Consumer regions {group.consumer_regions} "
+                f"→ allowed fallback: {group.fallback_regions}"
+            )
+        group_lines.append(
+            f"  - Allowed consumer regions: {sorted(loader.all_consumer_regions)}"
+        )
+        group_lines.append(
+            "  - Requests from regions NOT in any group above MUST be rejected."
+        )
+        config_context += "\n".join(group_lines)
+
+    config_context += (
+        "\n\nWhen launching instances, automatically use the ami_id, key_name, "
         "and subnets from the region config above. Generate a unique request_id "
         "for each scheduling run. Use security_group_ids=[] (empty) unless the "
         "user specifies otherwise.\n"
