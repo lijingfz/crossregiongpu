@@ -28,3 +28,7 @@ build/
 
 # IDE
 .kiro/
+
+# AgentCore build artifacts
+.bedrock_agentcore/
+.bedrock_agentcore.yaml

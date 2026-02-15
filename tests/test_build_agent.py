@@ -121,46 +121,60 @@ class TestProperty3EnvVarConfigPassthrough:
         dynamodb_table=st.from_regex(r"GpuTest-[a-z]{3,8}", fullmatch=True),
         model_id=_model_id_st,
     )
-    @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture])
+    @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_env_vars_override_config_defaults(
-        self, env: str, dynamodb_table: str, model_id: str, monkeypatch,
+        self, env: str, dynamodb_table: str, model_id: str,
     ):
         """**Validates: Requirements 2.5, 4.4**
 
         Environment variables SHALL override config file defaults when
         no explicit parameter is provided.
         """
-        monkeypatch.setenv("SCHEDULER_ENV", env)
-        monkeypatch.setenv("DYNAMODB_TABLE", dynamodb_table)
-        monkeypatch.setenv("BEDROCK_MODEL_ID", model_id)
+        import os
+        from unittest.mock import patch
 
-        # Call without explicit params — env vars should take effect
-        agent = build_agent()
-        prompt = agent.system_prompt
+        env_vars = {
+            "SCHEDULER_ENV": env,
+            "DYNAMODB_TABLE": dynamodb_table,
+            "BEDROCK_MODEL_ID": model_id,
+        }
+        with patch.dict(os.environ, env_vars, clear=False):
+            agent = build_agent()
+            prompt = agent.system_prompt
 
-        assert f"Environment: {env}" in prompt
-        assert f"DynamoDB table: {dynamodb_table}" in prompt
-        assert agent.model.config["model_id"] == model_id
+            assert f"Environment: {env}" in prompt
+            assert f"DynamoDB table: {dynamodb_table}" in prompt
+            assert agent.model.config["model_id"] == model_id
 
     @given(
         env=_env_st,
         dynamodb_table=st.from_regex(r"GpuTest-[a-z]{3,8}", fullmatch=True),
+        model_id=_model_id_st,
     )
-    @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture])
+    @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_explicit_params_beat_env_vars(
-        self, env: str, dynamodb_table: str, monkeypatch,
+        self, env: str, dynamodb_table: str, model_id: str,
     ):
         """**Validates: Requirements 2.5, 4.4**
 
         Explicit parameters SHALL take priority over environment variables.
         """
-        # Set env vars to one value
-        monkeypatch.setenv("DYNAMODB_TABLE", "EnvVarTable")
-        monkeypatch.setenv("BEDROCK_MODEL_ID", "env-var-model")
+        import os
+        from unittest.mock import patch
 
-        # Pass explicit params — these should win
-        agent = build_agent(env=env, dynamodb_table=dynamodb_table)
-        prompt = agent.system_prompt
+        env_vars = {
+            "DYNAMODB_TABLE": "EnvVarTable",
+            "BEDROCK_MODEL_ID": "env-var-model",
+        }
+        with patch.dict(os.environ, env_vars, clear=False):
+            # Pass explicit params — these should win over env vars
+            agent = build_agent(
+                env=env,
+                dynamodb_table=dynamodb_table,
+                bedrock_model_id=model_id,
+            )
+            prompt = agent.system_prompt
 
-        assert f"DynamoDB table: {dynamodb_table}" in prompt
-        assert "DynamoDB table: EnvVarTable" not in prompt
+            assert f"DynamoDB table: {dynamodb_table}" in prompt
+            assert "DynamoDB table: EnvVarTable" not in prompt
+            assert agent.model.config["model_id"] == model_id
