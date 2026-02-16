@@ -117,3 +117,91 @@ def retrieve_conversation(
             "Failed to retrieve conversation from Memory (session=%s)", session_id
         )
         return []
+
+
+def search_ltm(
+    *,
+    query: str,
+    namespace: str = "gpu_scheduler",
+    max_results: int = 5,
+) -> list[dict[str, Any]]:
+    """Search long-term memories via semantic query.
+
+    Parameters
+    ----------
+    query:
+        Natural-language query for semantic search.
+    namespace:
+        LTM namespace (must match the strategy namespace).
+    max_results:
+        Maximum number of memory records to return.
+
+    Returns
+    -------
+    list[dict]
+        List of LTM records, or empty list on failure.
+
+    Requirements: 5.5
+    """
+    memory_id = os.environ.get("MEMORY_ID", "")
+    if not memory_id:
+        logger.warning("MEMORY_ID not configured – cannot search LTM")
+        return []
+
+    try:
+        client = _get_memory_client()
+        results = client.search_long_term_memories(
+            memory_id=memory_id,
+            namespace=namespace,
+            query=query,
+            max_results=max_results,
+        )
+        return results if results else []
+    except Exception:
+        logger.exception("Failed to search LTM (query=%s)", query)
+        return []
+
+
+def retrieve_ltm_context(max_results: int = 5, max_chars: int = 1000) -> str:
+    """Retrieve LTM knowledge and format as a context string for the agent.
+
+    Queries LTM for GPU scheduling experience and returns a formatted
+    text block suitable for injection into the system prompt.
+
+    Parameters
+    ----------
+    max_results:
+        Maximum number of LTM records to retrieve.
+    max_chars:
+        Hard cap on the total character length of the returned context.
+        Prevents prompt bloat as LTM accumulates over time.
+
+    Returns
+    -------
+    str
+        Formatted LTM context string, or empty string if no memories found.
+
+    Requirements: 5.5
+    """
+    memories = search_ltm(
+        query="GPU instance capacity scheduling experience and region availability",
+        max_results=max_results,
+    )
+    if not memories:
+        return ""
+
+    lines = ["\n\n## Historical Knowledge (from Long-Term Memory)\n"]
+    total_len = len(lines[0])
+    for i, mem in enumerate(memories, 1):
+        content = (
+            mem.get("content", "") if isinstance(mem, dict) else str(mem)
+        )
+        if not content:
+            continue
+        entry = f"{i}. {content}"
+        if total_len + len(entry) + 1 > max_chars:
+            break
+        lines.append(entry)
+        total_len += len(entry) + 1
+
+    return "\n".join(lines) if len(lines) > 1 else ""

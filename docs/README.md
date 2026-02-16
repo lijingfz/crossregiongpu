@@ -81,7 +81,7 @@ agentcore launch \
   --env BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-20250514-v1:0 \
   --env BEDROCK_REGION=us-west-2 \
   --env AUTH_SECRET_KEY=<your-jwt-secret> \
-  --env MEMORY_ID=<memory-id> \
+  --env MEMORY_ID=gpu_scheduler_memory-1az3i38LW2 \
   --env MEMORY_REGION=us-west-2
 ```
 
@@ -100,7 +100,7 @@ agentcore launch --auto-update-on-conflict \
   --env BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-20250514-v1:0 \
   --env BEDROCK_REGION=us-west-2 \
   --env AUTH_SECRET_KEY=<your-jwt-secret> \
-  --env MEMORY_ID=<memory-id> \
+  --env MEMORY_ID=gpu_scheduler_memory-1az3i38LW2 \
   --env MEMORY_REGION=us-west-2
 ```
 
@@ -168,19 +168,41 @@ aws iam put-role-policy \
 }'
 ```
 
-### 生成测试 Token
+### 生成认证 Token
+
+系统使用 HS256 JWT 进行认证，Token 中包含 `user_id`、`username`、`roles` 字段，由 `AUTH_SECRET_KEY` 签名。`src/agent/auth.py` 中的 `validate_token()` 负责验证。
+
+使用 `scripts/generate_token.py` 脚本生成：
 
 ```bash
-python3 -c "
-import jwt
-token = jwt.encode(
-    {'user_id': 'test_user', 'username': 'yourname', 'roles': ['admin']},
-    '<your-jwt-secret>',
-    algorithm='HS256'
-)
-print(token)
-"
+# 设置密钥（必须与 agentcore launch 时的 AUTH_SECRET_KEY 一致）
+export AUTH_SECRET_KEY="your-jwt-secret"
+
+# 使用默认值生成（user_id=default_user，有效期 24 小时）
+python scripts/generate_token.py
+
+# 自定义用户信息和有效期
+python scripts/generate_token.py --user-id admin01 --username "Li Jing" --roles admin,operator --expires 72
+
+# 也可以直接通过 --secret 参数指定密钥
+python scripts/generate_token.py --secret your-jwt-secret --user-id test_user
+
+# 纯 token 输出（方便赋值给变量或脚本调用）
+TOKEN=$(python scripts/generate_token.py --raw)
 ```
+
+参数说明：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--user-id` | `default_user` | 用户 ID，对应 Token 中的 `user_id` / `sub` |
+| `--username` | `Default User` | 用户名 |
+| `--roles` | `operator` | 角色列表，逗号分隔（如 `admin,operator`） |
+| `--expires` | `24` | 有效期（小时） |
+| `--secret` | 读 `AUTH_SECRET_KEY` 环境变量 | HMAC 签名密钥 |
+| `--raw` | 否 | 只输出 token 字符串，不输出其他信息 |
+
+> **注意**：`--secret` 或 `AUTH_SECRET_KEY` 必须与 `agentcore launch --env AUTH_SECRET_KEY=...` 中设置的值一致，否则 Agent 会拒绝该 Token。
 
 ### 测试命令
 

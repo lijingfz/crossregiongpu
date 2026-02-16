@@ -112,6 +112,7 @@ def build_agent(
     import yaml
 
     from src.agent.approval import ApprovalConfig, ApprovalHook
+    from src.agent.memory import retrieve_ltm_context
     from src.config.loader import ConfigLoader
 
     # --- Resolve environment name ---
@@ -212,6 +213,12 @@ def build_agent(
     )
 
     full_system_prompt = SYSTEM_PROMPT + config_context
+
+    # --- Inject LTM context if available (Req 5.5) ---
+    ltm_context = retrieve_ltm_context()
+    if ltm_context:
+        full_system_prompt += ltm_context
+        logger.info("LTM context injected into system prompt (%d chars)", len(ltm_context))
 
     # --- Build approval hook ---
     approval_cfg = env_cfg.get("approval", {})

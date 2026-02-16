@@ -137,6 +137,8 @@ AgentCore Runtime 通过 `--env` 注入以下环境变量：
 | `BEDROCK_REGION` | Bedrock 区域 | `us-west-2` |
 | `AUTH_ENDPOINT` | 认证服务端点 | — |
 | `AUTH_SECRET_KEY` | JWT 验证密钥 | — |
+| `MEMORY_ID` | AgentCore Memory 资源 ID | `gpu_scheduler_memory-1az3i38LW2` |
+| `MEMORY_REGION` | Memory 所在区域 | `us-west-2` |
 
 ### 使用部署脚本
 
@@ -165,7 +167,9 @@ agentcore launch \
   --env BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-20250514-v1:0 \
   --env BEDROCK_REGION=us-west-2 \
   --env AUTH_ENDPOINT=https://auth.example.com/verify \
-  --env AUTH_SECRET_KEY=<secret>
+  --env AUTH_SECRET_KEY=<secret> \
+  --env MEMORY_ID=gpu_scheduler_memory-1az3i38LW2 \
+  --env MEMORY_REGION=us-west-2
 ```
 
 ## 验证方法

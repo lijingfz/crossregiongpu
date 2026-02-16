@@ -122,12 +122,19 @@ agentcore configure --entrypoint agent_entrypoint.py
 # ── Step 2: Launch on AgentCore ─────────────────────────────────────────
 
 log "Launching agent on AgentCore Runtime..."
+MEMORY_ID=$(read_config "memory_id" "gpu_scheduler_memory-1az3i38LW2")
+MEMORY_REGION=$(read_config "memory_region" "us-west-2")
+
+log "Memory — ID: ${MEMORY_ID} | Region: ${MEMORY_REGION}"
+
 agentcore launch \
   --env SCHEDULER_ENV="${ENV}" \
   --env SSM_PARAMETER="${SSM_PARAM}" \
   --env DYNAMODB_TABLE="${TABLE_NAME}" \
   --env BEDROCK_MODEL_ID="${BEDROCK_MODEL}" \
-  --env BEDROCK_REGION="${BEDROCK_REGION}"
+  --env BEDROCK_REGION="${BEDROCK_REGION}" \
+  --env MEMORY_ID="${MEMORY_ID}" \
+  --env MEMORY_REGION="${MEMORY_REGION}"
 
 log "AgentCore deployment complete for environment: ${ENV}"
 log ""
