@@ -29,7 +29,7 @@ from src.tools.query import ec2_query_instances
 # Regions that moto supports well for EC2
 CANDIDATE_REGIONS = ["us-east-1", "us-west-2", "eu-west-1"]
 
-_instance_type_pool = ["g5.xlarge", "g5.2xlarge", "t2.micro"]
+_instance_type_pool = ["g5.xlarge", "g5.2xlarge", "g5.xlarge"]
 _instance_type_st = st.sampled_from(_instance_type_pool)
 
 

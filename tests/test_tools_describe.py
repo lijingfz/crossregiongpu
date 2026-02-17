@@ -13,14 +13,14 @@ def test_describe_returns_instance_info():
     region = "us-east-1"
     ec2 = boto3.client("ec2", region_name=region)
 
-    resp = ec2.run_instances(ImageId="ami-12345678", InstanceType="t2.micro", MinCount=1, MaxCount=1)
+    resp = ec2.run_instances(ImageId="ami-12345678", InstanceType="g5.xlarge", MinCount=1, MaxCount=1)
     iid = resp["Instances"][0]["InstanceId"]
 
     result = ec2_describe_instances(region=region, instance_ids=[iid])
 
     assert len(result) == 1
     assert result[0]["instance_id"] == iid
-    assert result[0]["instance_type"] == "t2.micro"
+    assert result[0]["instance_type"] == "g5.xlarge"
     assert result[0]["az"] != ""
 
 
@@ -35,7 +35,7 @@ def test_describe_multiple_instances():
     region = "us-east-1"
     ec2 = boto3.client("ec2", region_name=region)
 
-    resp = ec2.run_instances(ImageId="ami-12345678", InstanceType="t2.micro", MinCount=3, MaxCount=3)
+    resp = ec2.run_instances(ImageId="ami-12345678", InstanceType="g5.xlarge", MinCount=3, MaxCount=3)
     ids = [i["InstanceId"] for i in resp["Instances"]]
 
     result = ec2_describe_instances(region=region, instance_ids=ids)

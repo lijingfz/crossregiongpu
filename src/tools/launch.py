@@ -19,7 +19,7 @@ import boto3
 from botocore.exceptions import ClientError
 from strands import tool
 
-from src.models.schemas import InstanceInfo, StepResult
+from src.models.schemas import InstanceInfo, StepResult, validate_gpu_instance_type
 
 
 def _generate_client_token(request_id: str, region: str, subnet: str, seq: int) -> str:
@@ -94,6 +94,20 @@ def ec2_launch_instances(
         tags = {}
     if not request_id:
         request_id = uuid.uuid4().hex[:12]
+
+    # --- GPU-only guard: reject non-GPU instance types ---
+    try:
+        validate_gpu_instance_type(instance_type)
+    except ValueError as exc:
+        return StepResult(
+            status="ERROR",
+            requested=target_count,
+            launched=0,
+            remaining=target_count,
+            region=region,
+            error_code="INVALID_INSTANCE_TYPE",
+            message=str(exc),
+        ).model_dump()
 
     client = boto3.client("ec2", region_name=region)
 

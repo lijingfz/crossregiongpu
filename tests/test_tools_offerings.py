@@ -11,7 +11,7 @@ from src.tools.offerings import describe_instance_type_offerings
 def test_supported_instance_type_returns_true():
     result = describe_instance_type_offerings(
         region="us-east-1",
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
     )
     assert result["supported"] is True
     assert len(result["offerings"]) > 0
@@ -31,7 +31,7 @@ def test_unsupported_instance_type_returns_false():
 def test_az_level_query():
     result = describe_instance_type_offerings(
         region="us-east-1",
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
         az="us-east-1a",
     )
     assert isinstance(result["supported"], bool)

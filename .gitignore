@@ -28,6 +28,11 @@ build/
 
 # IDE
 .kiro/
+.vscode/
+
+# Runtime data
+*.session_registry.json
+.session_registry.json
 
 # AgentCore build artifacts
 .bedrock_agentcore/

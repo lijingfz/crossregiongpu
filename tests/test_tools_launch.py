@@ -53,7 +53,7 @@ def test_full_launch():
 
     result = ec2_launch_instances(
         region=region,
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
         target_count=3,
         subnets=[sub1, sub2],
         ami="ami-12345678",
@@ -76,7 +76,7 @@ def test_partial_launch_single_subnet():
 
     result = ec2_launch_instances(
         region=region,
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
         target_count=2,
         subnets=[sub1],
         ami="ami-12345678",
@@ -97,7 +97,7 @@ def test_instances_have_required_fields():
 
     result = ec2_launch_instances(
         region=region,
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
         target_count=1,
         subnets=[sub1],
         ami="ami-12345678",
@@ -107,7 +107,7 @@ def test_instances_have_required_fields():
 
     inst = result["instances"][0]
     assert inst["instance_id"].startswith("i-")
-    assert inst["instance_type"] == "t2.micro"
+    assert inst["instance_type"] == "g5.xlarge"
     assert inst["az"] != ""
     assert inst["private_ip"] != ""
 
@@ -144,7 +144,7 @@ def test_binary_backoff_halves_batch():
     with patch("src.tools.launch._run_instances", side_effect=tracking_run):
         result = ec2_launch_instances(
             region=region,
-            instance_type="t2.micro",
+            instance_type="g5.xlarge",
             target_count=4,
             subnets=[sub1, sub2],
             ami="ami-12345678",
@@ -177,7 +177,7 @@ def test_all_subnets_exhausted_returns_none():
     with patch("src.tools.launch._run_instances", side_effect=always_fail):
         result = ec2_launch_instances(
             region=region,
-            instance_type="t2.micro",
+            instance_type="g5.xlarge",
             target_count=2,
             subnets=[sub1, sub2],
             ami="ami-12345678",
@@ -217,7 +217,7 @@ def test_subnet_rotation_on_partial_capacity():
     with patch("src.tools.launch._run_instances", side_effect=partial_sub1):
         result = ec2_launch_instances(
             region=region,
-            instance_type="t2.micro",
+            instance_type="g5.xlarge",
             target_count=5,
             subnets=[sub1, sub2],
             ami="ami-12345678",
@@ -252,7 +252,7 @@ def test_batch_never_exceeds_batch_max():
     with patch("src.tools.launch._run_instances", side_effect=tracking_run):
         ec2_launch_instances(
             region=region,
-            instance_type="t2.micro",
+            instance_type="g5.xlarge",
             target_count=10,
             subnets=[sub1, sub2],
             ami="ami-12345678",
@@ -283,7 +283,7 @@ def test_non_capacity_error_returns_error_status():
     with patch("src.tools.launch._run_instances", side_effect=auth_fail):
         result = ec2_launch_instances(
             region=region,
-            instance_type="t2.micro",
+            instance_type="g5.xlarge",
             target_count=2,
             subnets=[sub1],
             ami="ami-12345678",

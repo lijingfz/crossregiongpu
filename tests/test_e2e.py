@@ -174,7 +174,7 @@ def test_e2e_full_satisfaction_single_region():
 
     state = OrchestratorState(
         request_id="e2e-full-001",
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
         total_count=3,
         remaining=3,
         regions=[region_cfg],
@@ -232,7 +232,7 @@ def test_e2e_cross_region_fallback():
 
     state = OrchestratorState(
         request_id="e2e-fallback-001",
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
         total_count=6,
         remaining=6,
         regions=[region1, region2],
@@ -318,7 +318,7 @@ def test_e2e_all_regions_fail():
 
     state = OrchestratorState(
         request_id="e2e-fail-001",
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
         total_count=4,
         remaining=4,
         regions=[region1, region2],
@@ -380,7 +380,7 @@ def test_e2e_single_region_no_fallback():
 
     state = OrchestratorState(
         request_id="e2e-single-001",
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
         total_count=6,
         remaining=6,
         regions=[region1, region2],
@@ -443,7 +443,7 @@ def test_e2e_preflight_skip_then_fallback():
 
     state = OrchestratorState(
         request_id="e2e-preflight-001",
-        instance_type="t2.micro",
+        instance_type="g5.xlarge",
         total_count=3,
         remaining=3,
         regions=[region1, region2],

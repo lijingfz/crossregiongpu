@@ -4,7 +4,31 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
+
+
+# ---------------------------------------------------------------------------
+# GPU instance type validation  (Security: only G5/G6/G6e allowed)
+# ---------------------------------------------------------------------------
+
+# Matches g4dn, g5, g5g, g6, g6e and any size suffix (e.g. g4dn.xlarge, g5.xlarge, g6e.2xlarge)
+_GPU_INSTANCE_TYPE_PATTERN = re.compile(r"^g(4dn|5g?|6e?)\..*$")
+
+
+def validate_gpu_instance_type(instance_type: str) -> str:
+    """Validate that instance_type belongs to an allowed GPU family (G5/G6/G6e).
+
+    Raises ValueError if the type is not a GPU instance.
+    """
+    if not _GPU_INSTANCE_TYPE_PATTERN.match(instance_type):
+        raise ValueError(
+            f"Instance type '{instance_type}' is not allowed. "
+            f"Only GPU instance families are permitted: g4dn, g5, g5g, g6, g6e. "
+            f"Example: g4dn.xlarge, g5.xlarge, g6e.2xlarge"
+        )
+    return instance_type
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +62,11 @@ class Plan(BaseModel):
     stop_conditions: List[str] = Field(
         default_factory=lambda: ["remaining=0", "regions_exhausted"]
     )
+
+    @field_validator("instance_type")
+    @classmethod
+    def _check_gpu_type(cls, v: str) -> str:
+        return validate_gpu_instance_type(v)
 
 
 # ---------------------------------------------------------------------------

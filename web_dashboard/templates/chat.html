@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>聊天 - GPU Scheduler</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header class="header">
+    <h1>GPU Scheduler</h1>
+    <div class="user-info">
+      <span id="display-user"></span>
+      <button class="btn-logout" id="btn-logout">登出</button>
+    </div>
+  </header>
+
+  <div class="main-layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span>最近对话</span>
+        <button class="btn-new-chat" id="btn-new-chat" title="新对话">+</button>
+      </div>
+      <ul class="session-list" id="session-list">
+        <!-- recent sessions rendered here -->
+      </ul>
+    </aside>
+
+    <div class="chat-container">
+      <div class="messages" id="messages">
+        <!-- messages rendered here -->
+      </div>
+      <div class="loading" id="loading" aria-live="polite">正在思考</div>
+      <div class="input-area">
+        <textarea id="msg-input" placeholder="输入消息… (Ctrl+Enter 发送)" rows="1"></textarea>
+        <button class="btn-send" id="btn-send">发送</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js?v=20260217"></script>
+</body>
+</html>

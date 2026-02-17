@@ -98,6 +98,9 @@ def get_region_order(
     3. Within the allowed set, sorts by great-circle distance.
     4. primary_region is placed first (distance=0).
     """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     if ssm_parameter:
         loader = ConfigLoader.from_ssm(ssm_parameter)
     else:
@@ -116,6 +119,17 @@ def get_region_order(
     # Intersect with fallback group if configured
     if allowed_set is not None:
         whitelist = whitelist & allowed_set
+
+    # Warn if primary_region is in a fallback group but missing from the
+    # regions whitelist — this is a configuration error that silently skips
+    # the user's preferred region.
+    if primary_region not in whitelist and (allowed_set is None or primary_region in allowed_set):
+        _log.warning(
+            "primary_region '%s' is allowed by fallback_groups but has no "
+            "entry in the regions config. It will be skipped. Add it to "
+            "config/regions.yaml to enable launching there.",
+            primary_region,
+        )
 
     origin = REGION_COORDINATES.get(primary_region)
 

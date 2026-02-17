@@ -16,6 +16,7 @@ fallback_groups:
     consumer_regions:
       - ap-southeast-1
     fallback_regions:
+      - ap-southeast-1
       - ap-south-1
       - ap-northeast-1
       - ap-northeast-2
@@ -30,6 +31,20 @@ fallback_groups:
       - ap-northeast-3
 
 regions:
+  - region: ap-southeast-1
+    priority: 0
+    key_name: gpu-key-ap-southeast-1
+    ami_id: ami-003b81a7f4076391c
+    azs:
+      - az_name: ap-southeast-1a
+        # GPU支持: G5, G6
+        subnets:
+          - subnet-07b7d3e0028f53034
+      - az_name: ap-southeast-1b
+        # GPU支持: G5, G6
+        subnets:
+          - subnet-02e089cb8e03f27b0
+
   - region: ap-south-1
     priority: 1
     key_name: gpu-key-ap-south-1

@@ -1,0 +1,32 @@
+# systemd service file for GPU Scheduler Web Dashboard
+# Requirements: 8.1
+#
+# Usage:
+#   1. Copy to /etc/systemd/system/web-dashboard.service
+#   2. sudo systemctl daemon-reload
+#   3. sudo systemctl enable --now web-dashboard
+
+[Unit]
+Description=GPU Scheduler Web Dashboard (FastAPI + Uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/web-dashboard
+ExecStart=/opt/web-dashboard/.venv/bin/uvicorn web_dashboard.app:app --host 0.0.0.0 --port 8000 --workers 2
+Restart=always
+RestartSec=5
+
+# Environment variables — override via /etc/default/web-dashboard or drop-in
+EnvironmentFile=-/etc/default/web-dashboard
+Environment=PYTHONPATH=/opt/web-dashboard
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

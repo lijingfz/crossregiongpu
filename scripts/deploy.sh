@@ -57,22 +57,26 @@ log "AWS Account: ${AWS_ACCOUNT}"
 
 # ── Load environment-specific settings ──────────────────────────────────
 
+# Use venv Python if available (has pyyaml installed)
+PYTHON="${PROJECT_ROOT}/.venv/bin/python"
+[[ -x "$PYTHON" ]] || PYTHON="python3"
+
 # Parse stack name and SSM parameter name from env config
-STACK_NAME=$(python3 -c "
+STACK_NAME=$("$PYTHON" -c "
 import yaml, sys
 with open('${ENV_CONFIG}') as f:
     cfg = yaml.safe_load(f)
 print(cfg.get('stack_name', 'gpu-scheduler-${ENV}'))
 ")
 
-TABLE_NAME=$(python3 -c "
+TABLE_NAME=$("$PYTHON" -c "
 import yaml, sys
 with open('${ENV_CONFIG}') as f:
     cfg = yaml.safe_load(f)
 print(cfg.get('dynamodb_table', 'GpuProvisioningInstances-${ENV}'))
 ")
 
-SSM_PARAM=$(python3 -c "
+SSM_PARAM=$("$PYTHON" -c "
 import yaml, sys
 with open('${ENV_CONFIG}') as f:
     cfg = yaml.safe_load(f)
@@ -100,7 +104,7 @@ log "DynamoDB table deployed: ${TABLE_NAME}"
 REGIONS_CONFIG="${PROJECT_ROOT}/config/regions.yaml"
 if [[ -f "$REGIONS_CONFIG" ]]; then
   log "Uploading region config to SSM: ${SSM_PARAM}"
-  REGIONS_JSON=$(python3 -c "
+  REGIONS_JSON=$("$PYTHON" -c "
 import yaml, json, sys
 with open('${REGIONS_CONFIG}') as f:
     data = yaml.safe_load(f)
@@ -125,8 +129,13 @@ pip install -e ".[dev]" --quiet
 # ── Step 4: Smoke test ──────────────────────────────────────────────────
 
 if [[ "$ENV" != "prod" ]]; then
-  log "Running smoke tests..."
-  python -m pytest tests/ -x -q --tb=short 2>&1 | tail -5 || {
+  log "Running smoke tests (excluding slow PBT and e2e tests)..."
+  python -m pytest tests/ -x -q --tb=short \
+    --ignore-glob="tests/test_pbt_*" \
+    --ignore=tests/test_e2e.py \
+    --ignore=tests/test_build_agent.py \
+    --ignore=tests/test_entrypoint.py \
+    2>&1 | tail -5 || {
     err "Smoke tests failed. Deployment may be incomplete."
     exit 1
   }

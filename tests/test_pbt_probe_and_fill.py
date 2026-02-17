@@ -135,7 +135,7 @@ class TestProperty1BatchMax:
         with patch("src.tools.launch._run_instances", side_effect=tracking_run):
             ec2_launch_instances(
                 region=region,
-                instance_type="t2.micro",
+                instance_type="g5.xlarge",
                 target_count=target_count,
                 subnets=[sub_id],
                 ami="ami-12345678",
@@ -180,7 +180,7 @@ class TestProperty2BinaryBackoff:
         with patch("src.tools.launch._run_instances", side_effect=always_fail):
             ec2_launch_instances(
                 region=region,
-                instance_type="t2.micro",
+                instance_type="g5.xlarge",
                 target_count=initial_batch,
                 subnets=[sub_id],
                 ami="ami-12345678",
@@ -244,7 +244,7 @@ class TestProperty3CapacityExhaustion:
         with patch("src.tools.launch._run_instances", side_effect=always_fail):
             result = ec2_launch_instances(
                 region=region,
-                instance_type="t2.micro",
+                instance_type="g5.xlarge",
                 target_count=5,
                 subnets=subnets,
                 ami="ami-12345678",

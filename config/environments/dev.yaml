@@ -20,5 +20,9 @@ approval:
   batch_threshold: 50        # relaxed for dev
   allowed_geo_regions: []    # no geo restriction in dev
 
+# Memory (AgentCore Memory integration)
+memory_id: gpu_scheduler_memory-1az3i38LW2
+memory_region: us-west-2
+
 # Logging
 log_level: DEBUG

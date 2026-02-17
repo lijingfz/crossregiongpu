@@ -29,7 +29,7 @@ def _create_instances(region: str, count: int = 1, **kwargs):
 
     run_kwargs = {
         "ImageId": "ami-12345678",
-        "InstanceType": kwargs.get("instance_type", "t2.micro"),
+        "InstanceType": kwargs.get("instance_type", "g5.xlarge"),
         "MinCount": count,
         "MaxCount": count,
         "SubnetId": kwargs.get("subnet_id", subnet_id),
@@ -57,7 +57,7 @@ def _write_regions_yaml(regions_data: list) -> str:
 def test_query_by_instance_type():
     region = "us-east-1"
     _create_instances(region, 2, instance_type="g5.xlarge")
-    _create_instances(region, 1, instance_type="t2.micro")
+    _create_instances(region, 1, instance_type="g6.xlarge")
 
     result = ec2_query_instances(
         region=region, instance_type="g5.xlarge", state="running"
@@ -88,7 +88,7 @@ def test_query_by_subnet_id():
     subnet_b = sub_b["Subnet"]["SubnetId"]
     ec2.run_instances(
         ImageId="ami-12345678",
-        InstanceType="t2.micro",
+        InstanceType="g5.xlarge",
         MinCount=1,
         MaxCount=1,
         SubnetId=subnet_b,

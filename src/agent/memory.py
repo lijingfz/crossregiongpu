@@ -150,11 +150,11 @@ def search_ltm(
 
     try:
         client = _get_memory_client()
-        results = client.search_long_term_memories(
+        results = client.retrieve_memories(
             memory_id=memory_id,
             namespace=namespace,
             query=query,
-            max_results=max_results,
+            top_k=max_results,
         )
         return results if results else []
     except Exception:

@@ -25,7 +25,7 @@ from src.tools.query import ec2_query_instances
 REGION = "us-east-1"
 AZ = f"{REGION}a"
 
-_instance_type_pool = ["g5.xlarge", "g5.2xlarge", "g6.xlarge", "t2.micro"]
+_instance_type_pool = ["g5.xlarge", "g5.2xlarge", "g6.xlarge", "g5.xlarge"]
 _instance_type_st = st.sampled_from(_instance_type_pool)
 
 REQUIRED_FIELDS = [

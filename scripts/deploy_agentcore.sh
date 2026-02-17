@@ -98,7 +98,9 @@ log "AWS Account: ${AWS_ACCOUNT}"
 # ── Load environment config ─────────────────────────────────────────────
 
 read_config() {
-  python3 -c "
+  PYTHON="${PROJECT_ROOT}/.venv/bin/python"
+  [[ -x "$PYTHON" ]] || PYTHON="python3"
+  "$PYTHON" -c "
 import yaml, sys
 with open('${ENV_CONFIG}') as f:
     cfg = yaml.safe_load(f)
@@ -113,11 +115,13 @@ BEDROCK_REGION="${AWS_REGION_OVERRIDE:-$(read_config "bedrock_region" "us-west-2
 
 log "Config — Table: ${TABLE_NAME} | SSM: ${SSM_PARAM} | Model: ${BEDROCK_MODEL} | Region: ${BEDROCK_REGION}"
 
-# ── Step 1: Configure AgentCore ─────────────────────────────────────────
+# ── Step 1: Verify AgentCore config ─────────────────────────────────────
 
-log "Running agentcore configure..."
-cd "$PROJECT_ROOT"
-agentcore configure --entrypoint agent_entrypoint.py
+AGENTCORE_CONFIG="${PROJECT_ROOT}/.bedrock_agentcore.yaml"
+if [[ ! -f "$AGENTCORE_CONFIG" ]]; then
+  die ".bedrock_agentcore.yaml not found. Run 'agentcore configure' interactively first."
+fi
+log "AgentCore config found: ${AGENTCORE_CONFIG}"
 
 # ── Step 2: Launch on AgentCore ─────────────────────────────────────────
 
