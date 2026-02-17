@@ -120,6 +120,28 @@ else
   log "WARN: ${REGIONS_CONFIG} not found, skipping SSM upload."
 fi
 
+# ── Step 2b: Upload AUTH_SECRET_KEY to SSM (SecureString) ───────────────
+
+AUTH_SECRET=$("$PYTHON" -c "
+import yaml
+with open('${ENV_CONFIG}') as f:
+    cfg = yaml.safe_load(f)
+print(cfg.get('auth_secret_key', ''))
+")
+
+if [[ -n "$AUTH_SECRET" ]]; then
+  AUTH_SSM_PARAM="/gpu-scheduler/${ENV}/auth-secret-key"
+  log "Uploading AUTH_SECRET_KEY to SSM: ${AUTH_SSM_PARAM}"
+  aws ssm put-parameter \
+    --name "${AUTH_SSM_PARAM}" \
+    --type SecureString \
+    --value "${AUTH_SECRET}" \
+    --overwrite
+  log "AUTH_SECRET_KEY uploaded to SSM."
+else
+  log "WARN: auth_secret_key not found in ${ENV_CONFIG}, skipping."
+fi
+
 # ── Step 3: Install Python dependencies ─────────────────────────────────
 
 log "Installing Python dependencies..."

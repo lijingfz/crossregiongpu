@@ -131,6 +131,17 @@ MEMORY_REGION=$(read_config "memory_region" "us-west-2")
 
 log "Memory — ID: ${MEMORY_ID} | Region: ${MEMORY_REGION}"
 
+# ── Load AUTH_SECRET_KEY from SSM Parameter Store ───────────────────────
+
+AUTH_SSM_PARAM="/gpu-scheduler/${ENV}/auth-secret-key"
+log "Loading AUTH_SECRET_KEY from SSM: ${AUTH_SSM_PARAM}"
+AUTH_SECRET_KEY=$(aws ssm get-parameter \
+  --name "${AUTH_SSM_PARAM}" \
+  --with-decryption \
+  --query "Parameter.Value" \
+  --output text 2>/dev/null) \
+  || die "Failed to load AUTH_SECRET_KEY from SSM parameter: ${AUTH_SSM_PARAM}. Create it with: aws ssm put-parameter --name '${AUTH_SSM_PARAM}' --type SecureString --value '<your-secret>'"
+
 agentcore launch \
   --env SCHEDULER_ENV="${ENV}" \
   --env SSM_PARAMETER="${SSM_PARAM}" \
@@ -138,7 +149,8 @@ agentcore launch \
   --env BEDROCK_MODEL_ID="${BEDROCK_MODEL}" \
   --env BEDROCK_REGION="${BEDROCK_REGION}" \
   --env MEMORY_ID="${MEMORY_ID}" \
-  --env MEMORY_REGION="${MEMORY_REGION}"
+  --env MEMORY_REGION="${MEMORY_REGION}" \
+  --env AUTH_SECRET_KEY="${AUTH_SECRET_KEY}"
 
 log "AgentCore deployment complete for environment: ${ENV}"
 log ""

@@ -24,5 +24,8 @@ approval:
     - ap-northeast-1
     - ap-northeast-2
 
+# Auth
+auth_secret_key: gpu-scheduler-prod-secret-2026
+
 # Logging
 log_level: WARNING

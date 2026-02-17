@@ -24,5 +24,8 @@ approval:
 memory_id: gpu_scheduler_memory-1az3i38LW2
 memory_region: us-west-2
 
+# Auth
+auth_secret_key: gpu-scheduler-dev-secret-2026
+
 # Logging
 log_level: DEBUG
