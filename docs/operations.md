@@ -78,12 +78,32 @@ log_level: WARNING
 
 ### DynamoDB 写入失败
 
-原因：可能是表不存在或权限不足。
+原因：可能是表不存在、权限不足、或 region 不匹配。
 
 处理：
 1. 确认 DynamoDB 表已创建：`aws dynamodb describe-table --table-name <table>`
 2. 确认 IAM 权限包含 `dynamodb:BatchWriteItem`
 3. 检查表的 billing mode 是否为 PAY_PER_REQUEST
+4. 确认 `dynamodb_put_instances` 的 `dynamodb_region` 参数与表所在 region 一致（默认 `us-west-2`）
+
+### Agent 循环启动实例
+
+原因：LLM 未能识别任务已完成，反复调用 `ec2_launch_instances`。
+
+处理：
+1. 确认 `LaunchGuardHook` 已在 `build_agent()` 中注入（默认已启用）
+2. 检查 `max_launch_calls` 配置是否合理（默认 8）
+3. 查看日志中 `LaunchGuard blocked launch` 关键字确认 Hook 是否生效
+4. 如需调整上限，修改环境配置文件中的 `max_launch_calls` 字段
+
+### AgentCore Memory 权限不足
+
+原因：执行角色缺少 `bedrock-agentcore:*MemoryRecord*` 权限。
+
+处理：
+1. 运行 `./scripts/deploy_agentcore.sh <env>` 会自动附加 Memory IAM 策略
+2. 手动修复：`aws iam put-role-policy --role-name <role> --policy-name BedrockAgentCoreMemoryAccess --policy-document <policy>`
+3. 确认 `.bedrock_agentcore.yaml` 中的 `execution_role` 配置正确
 
 ### Agent 响应超时
 

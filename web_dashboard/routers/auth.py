@@ -41,9 +41,25 @@ def _verify_credentials(username: str, password: str) -> dict | None:
     return None
 
 
+def _get_secret_key() -> str:
+    """Resolve AUTH_SECRET_KEY from env or dev config fallback."""
+    key = os.environ.get("AUTH_SECRET_KEY", "")
+    if key:
+        return key
+    # Fallback: read from dev environment config
+    try:
+        import yaml
+
+        with open("config/environments/dev.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        return cfg.get("auth_secret_key", "")
+    except Exception:
+        return ""
+
+
 def _create_token(user_info: dict, expires_hours: int = 24) -> str:
     """Generate a HS256 JWT token for the given user."""
-    secret_key = os.environ.get("AUTH_SECRET_KEY", "")
+    secret_key = _get_secret_key()
     now = datetime.now(timezone.utc)
     payload = {
         "user_id": user_info["user_id"],

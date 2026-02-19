@@ -26,7 +26,7 @@ def dynamodb_put_instances(
     instances: List[Dict],
     step_id: str = "",
     allocation_status: str = "PARTIAL",
-    dynamodb_region: str = "us-east-1",
+    dynamodb_region: str = "us-west-2",
 ) -> dict:
     """Write launched instance records to DynamoDB in batches.
 

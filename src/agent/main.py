@@ -112,6 +112,7 @@ def build_agent(
     import yaml
 
     from src.agent.approval import ApprovalConfig, ApprovalHook
+    from src.agent.launch_guard import DEFAULT_MAX_LAUNCH_CALLS, LaunchGuardHook
     from src.agent.memory import retrieve_ltm_context
     from src.config.loader import ConfigLoader
 
@@ -229,14 +230,21 @@ def build_agent(
         )
     )
 
+    # --- Build launch guard hook (Req 3.7 — prevent runaway loops) ---
+    max_launch_calls = env_cfg.get("max_launch_calls", DEFAULT_MAX_LAUNCH_CALLS)
+    launch_guard = LaunchGuardHook(max_launch_calls=max_launch_calls)
+
     # --- Create agent ---
     agent = create_agent(
         model_id=bedrock_model_id,
         region_name=bedrock_region,
         max_tokens=max_tokens,
-        hooks=[approval_hook],
+        hooks=[approval_hook, launch_guard],
         system_prompt=full_system_prompt,
     )
+
+    # Attach guard reference so callers can reset() between invocations
+    agent._launch_guard = launch_guard  # type: ignore[attr-defined]
 
     return agent
 
@@ -365,6 +373,11 @@ def main() -> None:
                 continue
             if user_input.lower() in ("exit", "quit", "q"):
                 break
+
+            # Reset launch guard counters before each new prompt (Req 3.7)
+            guard = getattr(agent, "_launch_guard", None)
+            if guard is not None:
+                guard.reset()
 
             result = agent(user_input)
 

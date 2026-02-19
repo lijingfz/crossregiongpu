@@ -68,6 +68,12 @@ def _run_instances(
     return response.get("Instances", [])
 
 
+# Hard ceiling on instances per single tool call.
+# Prevents LLM hallucination from launching an unbounded number of instances
+# when the Agent autonomously invokes this tool.
+MAX_TARGET_COUNT = 20
+
+
 @tool
 def ec2_launch_instances(
     region: str,
@@ -94,6 +100,33 @@ def ec2_launch_instances(
         tags = {}
     if not request_id:
         request_id = uuid.uuid4().hex[:12]
+
+    # --- target_count guard: reject non-positive or excessively large values ---
+    if target_count <= 0:
+        return StepResult(
+            status="ERROR",
+            requested=target_count,
+            launched=0,
+            remaining=0,
+            region=region,
+            error_code="INVALID_TARGET_COUNT",
+            message=f"target_count must be positive, got {target_count}",
+        ).model_dump()
+
+    if target_count > MAX_TARGET_COUNT:
+        return StepResult(
+            status="ERROR",
+            requested=target_count,
+            launched=0,
+            remaining=target_count,
+            region=region,
+            error_code="TARGET_COUNT_EXCEEDED",
+            message=(
+                f"target_count={target_count} exceeds the per-call maximum "
+                f"of {MAX_TARGET_COUNT}. Split into smaller requests or "
+                f"adjust MAX_TARGET_COUNT if this is intentional."
+            ),
+        ).model_dump()
 
     # --- GPU-only guard: reject non-GPU instance types ---
     try:

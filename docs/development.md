@@ -39,7 +39,8 @@ pip install -e ".[dev]"
 │       ├── main.py              # Agent 工厂函数
 │       ├── prompts.py           # System Prompt 和模板
 │       ├── state.py             # Agent State 管理
-│       └── approval.py          # Human-in-the-loop 审批 Hook
+│       ├── approval.py          # Human-in-the-loop 审批 Hook
+│       └── launch_guard.py      # 防循环启动 Hook (LaunchGuardHook)
 ├── config/
 │   ├── regions.yaml             # Region/AZ/Subnet 白名单
 │   └── environments/            # 多环境配置 (dev/staging/prod)

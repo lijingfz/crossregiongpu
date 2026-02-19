@@ -97,9 +97,10 @@ log "AWS Account: ${AWS_ACCOUNT}"
 
 # ── Load environment config ─────────────────────────────────────────────
 
+PYTHON="${PROJECT_ROOT}/.venv/bin/python"
+[[ -x "$PYTHON" ]] || PYTHON="python3"
+
 read_config() {
-  PYTHON="${PROJECT_ROOT}/.venv/bin/python"
-  [[ -x "$PYTHON" ]] || PYTHON="python3"
   "$PYTHON" -c "
 import yaml, sys
 with open('${ENV_CONFIG}') as f:
@@ -123,11 +124,59 @@ if [[ ! -f "$AGENTCORE_CONFIG" ]]; then
 fi
 log "AgentCore config found: ${AGENTCORE_CONFIG}"
 
-# ── Step 2: Launch on AgentCore ─────────────────────────────────────────
+# ── Step 2: Ensure IAM role has Memory permissions ──────────────────────
 
-log "Launching agent on AgentCore Runtime..."
 MEMORY_ID=$(read_config "memory_id" "gpu_scheduler_memory-1az3i38LW2")
 MEMORY_REGION=$(read_config "memory_region" "us-west-2")
+
+EXECUTION_ROLE_ARN=$("$PYTHON" -c "
+import yaml
+with open('${AGENTCORE_CONFIG}') as f:
+    cfg = yaml.safe_load(f)
+agent_cfg = cfg.get('agents', {}).get('agent_entrypoint', {}).get('aws', {})
+print(agent_cfg.get('execution_role', ''))
+" 2>/dev/null || echo "")
+
+if [[ -n "$EXECUTION_ROLE_ARN" ]]; then
+  ROLE_NAME=$(echo "$EXECUTION_ROLE_ARN" | sed 's|.*/||')
+  log "Ensuring Memory permissions on role: ${ROLE_NAME}"
+
+  MEMORY_ARN="arn:aws:bedrock-agentcore:${BEDROCK_REGION}:${AWS_ACCOUNT}:memory/${MEMORY_ID}"
+
+  MEMORY_POLICY=$(cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BedrockAgentCoreMemoryAccess",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateMemoryRecord",
+        "bedrock-agentcore:RetrieveMemoryRecords",
+        "bedrock-agentcore:DeleteMemoryRecord",
+        "bedrock-agentcore:UpdateMemoryRecord"
+      ],
+      "Resource": "${MEMORY_ARN}"
+    }
+  ]
+}
+EOF
+)
+
+  aws iam put-role-policy \
+    --role-name "${ROLE_NAME}" \
+    --policy-name "BedrockAgentCoreMemoryAccess" \
+    --policy-document "${MEMORY_POLICY}" \
+    2>/dev/null \
+    && log "Memory IAM policy attached to role: ${ROLE_NAME}" \
+    || log "WARN: Could not attach Memory policy (may already exist or insufficient IAM permissions)"
+else
+  log "WARN: Could not determine execution role from .bedrock_agentcore.yaml, skipping Memory IAM policy"
+fi
+
+# ── Step 3: Launch on AgentCore ─────────────────────────────────────────
+
+log "Launching agent on AgentCore Runtime..."
 
 log "Memory — ID: ${MEMORY_ID} | Region: ${MEMORY_REGION}"
 

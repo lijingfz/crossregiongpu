@@ -293,3 +293,70 @@ def test_non_capacity_error_returns_error_status():
 
     assert result["status"] == "ERROR"
     assert result["error_code"] == "UnauthorizedOperation"
+
+# ---------------------------------------------------------------------------
+# target_count guard tests (prevents LLM hallucination over-provisioning)
+# ---------------------------------------------------------------------------
+
+def test_target_count_zero_returns_error():
+    """target_count=0 should be rejected without calling AWS."""
+    result = ec2_launch_instances(
+        region="us-east-1",
+        instance_type="g5.xlarge",
+        target_count=0,
+        subnets=["subnet-fake"],
+        ami="ami-12345678",
+        security_group_ids=[],
+    )
+    assert result["status"] == "ERROR"
+    assert result["error_code"] == "INVALID_TARGET_COUNT"
+
+
+def test_target_count_negative_returns_error():
+    """Negative target_count should be rejected."""
+    result = ec2_launch_instances(
+        region="us-east-1",
+        instance_type="g5.xlarge",
+        target_count=-5,
+        subnets=["subnet-fake"],
+        ami="ami-12345678",
+        security_group_ids=[],
+    )
+    assert result["status"] == "ERROR"
+    assert result["error_code"] == "INVALID_TARGET_COUNT"
+
+
+def test_target_count_exceeds_max_returns_error():
+    """target_count above MAX_TARGET_COUNT should be rejected."""
+    from src.tools.launch import MAX_TARGET_COUNT
+
+    result = ec2_launch_instances(
+        region="us-east-1",
+        instance_type="g5.xlarge",
+        target_count=MAX_TARGET_COUNT + 1,
+        subnets=["subnet-fake"],
+        ami="ami-12345678",
+        security_group_ids=[],
+    )
+    assert result["status"] == "ERROR"
+    assert result["error_code"] == "TARGET_COUNT_EXCEEDED"
+    assert str(MAX_TARGET_COUNT) in result["message"]
+
+
+def test_target_count_at_max_is_allowed():
+    """target_count exactly at MAX_TARGET_COUNT should NOT be rejected by the guard."""
+    from src.tools.launch import MAX_TARGET_COUNT
+
+    # This will fail at the AWS call level (no real VPC), but should pass
+    # the target_count guard. We just verify it doesn't return TARGET_COUNT_EXCEEDED.
+    result = ec2_launch_instances(
+        region="us-east-1",
+        instance_type="g5.xlarge",
+        target_count=MAX_TARGET_COUNT,
+        subnets=["subnet-fake"],
+        ami="ami-12345678",
+        security_group_ids=[],
+    )
+    assert result.get("error_code") != "TARGET_COUNT_EXCEEDED"
+
+

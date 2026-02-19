@@ -45,6 +45,16 @@ def validate_token(token: str) -> dict:
 
     secret_key = os.environ.get("AUTH_SECRET_KEY")
     if not secret_key:
+        # Fallback: read from dev environment config
+        try:
+            import yaml
+
+            with open("config/environments/dev.yaml", "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            secret_key = cfg.get("auth_secret_key", "")
+        except Exception:
+            pass
+    if not secret_key:
         raise AuthenticationError("AUTH_SECRET_KEY not configured")
 
     try:

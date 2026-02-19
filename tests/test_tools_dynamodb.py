@@ -45,6 +45,7 @@ def test_put_instances_writes_records():
         instances=instances,
         step_id="s1",
         allocation_status="PARTIAL",
+        dynamodb_region="us-east-1",
     )
 
     assert result["written"] == 2
@@ -65,6 +66,7 @@ def test_put_instances_sk_format():
         region="us-west-2",
         instance_type="g5.xlarge",
         instances=[{"instance_id": "i-xyz", "az": "us-west-2a", "private_ip": "10.0.1.1"}],
+        dynamodb_region="us-east-1",
     )
 
     resp = table.get_item(Key={"request_id": "req-002", "region_instance_id": "us-west-2#i-xyz"})

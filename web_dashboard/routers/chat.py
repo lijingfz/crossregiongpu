@@ -39,6 +39,15 @@ def _make_agent_token(user: dict) -> str:
     ``src.agent.auth.validate_token``.
     """
     secret = os.environ.get("AUTH_SECRET_KEY", "")
+    if not secret:
+        try:
+            import yaml
+
+            with open("config/environments/dev.yaml", "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            secret = cfg.get("auth_secret_key", "")
+        except Exception:
+            pass
     now = datetime.now(timezone.utc)
     payload = {
         "user_id": user.get("user_id", ""),

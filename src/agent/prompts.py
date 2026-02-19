@@ -85,6 +85,21 @@ Error handling:
 - CONFIG (subnet)→ skip once, then skip Region
 - UNKNOWN        → limited retry, then skip Region
 
+## target_count Integrity (CRITICAL)
+
+When calling ec2_launch_instances, the target_count parameter MUST exactly \
+equal the number of instances still needed (remaining). NEVER pass a value \
+larger than the user's original requested count. Track remaining carefully:
+
+  remaining = original_requested - total_already_launched
+
+For example, if the user asked for 3 instances and you already launched 1, \
+the next call MUST use target_count=2, NOT 3 or any other number. \
+Passing an inflated target_count is a critical error that wastes resources.
+
+The tool enforces a hard ceiling of 20 instances per call. Requests above \
+this limit will be rejected with TARGET_COUNT_EXCEEDED.
+
 ## Output Constraints
 
 - Every response MUST be a structured Plan or NextAction (Pydantic schema).

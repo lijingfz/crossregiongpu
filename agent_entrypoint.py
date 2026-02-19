@@ -41,6 +41,14 @@ def _get_or_create_agent(session_id: str) -> Any:
     return _session_agents[session_id]
 
 
+def _reset_launch_guard(agent: Any) -> None:
+    """Reset the LaunchGuardHook counters before a new invocation."""
+    guard = getattr(agent, "_launch_guard", None)
+    if guard is not None:
+        guard.reset()
+        logger.debug("LaunchGuard reset for new invocation")
+
+
 def _extract_text(result: Any) -> str:
     """Extract text content from an AgentResult."""
     content = getattr(result, "message", {}).get("content", [])
@@ -149,6 +157,9 @@ async def invoke(payload: dict, context) -> dict:
             message="Payload must contain 'prompt' or 'approval_responses'",
             user_id=user_id,
         ).model_dump()
+
+    # Reset launch guard counters for the new invocation (Req 3.7)
+    _reset_launch_guard(agent)
 
     try:
         result = agent(prompt)
