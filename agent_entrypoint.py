@@ -11,10 +11,13 @@ Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.4, 6.1, 7.1, 7.2, 7.3, 7
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from typing import Any
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
+from bedrock_agentcore.runtime.context import BedrockAgentCoreContext
 
 from src.agent.auth import AuthenticationError, validate_token
 from src.agent.main import build_agent
@@ -33,6 +36,71 @@ _session_agents: dict[str, Any] = {}
 # This is necessary because AgentCore may not preserve in-process state between requests.
 _session_interrupt_cache: dict[str, dict] = {}
 
+# ---------------------------------------------------------------------------
+# Re-invocation response cache (Req 3.7 — idempotency)
+#
+# AgentCore Runtime infrastructure may re-invoke invoke() with the same
+# session_id + prompt immediately after a successful completion.  Without
+# caching, the second call runs the agent again, producing a confusing
+# "already launched" message instead of the real result.
+#
+# Cache key:  (session_id, prompt_hash)
+# Cache value: (response_dict, timestamp, request_id)
+#
+# On entry we check: if same (session_id, prompt_hash) was completed
+# within REINVOKE_WINDOW_SECONDS AND the current request_id differs
+# from the one that produced the cached response, it is a re-invocation
+# → return cached response immediately.
+#
+# A genuinely new user request with the same prompt will arrive with a
+# time gap > REINVOKE_WINDOW_SECONDS (user cannot type + submit in <2s).
+# ---------------------------------------------------------------------------
+_response_cache: dict[tuple[str, str], tuple[dict, float, str]] = {}
+REINVOKE_WINDOW_SECONDS = 10  # re-invocations arrive in <1s; 10s is sufficient
+
+
+def _prompt_hash(prompt: str) -> str:
+    """Return a short hash of the prompt for cache keying."""
+    return hashlib.sha256(prompt.encode()).hexdigest()[:16]
+
+
+def _check_reinvoke_cache(
+    session_id: str, prompt: str, current_request_id: str,
+) -> dict | None:
+    """Return cached response if this is a re-invocation, else None."""
+    key = (session_id, _prompt_hash(prompt))
+    cached = _response_cache.get(key)
+    if cached is None:
+        return None
+
+    resp, ts, orig_request_id = cached
+    elapsed = time.time() - ts
+
+    # Same request_id → not a re-invocation (shouldn't happen, but safe)
+    if current_request_id == orig_request_id:
+        return None
+
+    # Outside the window → genuine new request
+    if elapsed > REINVOKE_WINDOW_SECONDS:
+        # Evict stale entry
+        _response_cache.pop(key, None)
+        return None
+
+    print(
+        f"=== REINVOKE CACHE HIT === session={session_id}, "
+        f"elapsed={elapsed:.3f}s, orig_req={orig_request_id}, "
+        f"new_req={current_request_id}"
+    )
+    return resp
+
+
+def _store_reinvoke_cache(
+    session_id: str, prompt: str, response: dict, request_id: str,
+) -> None:
+    """Cache a successful response for re-invocation detection."""
+    key = (session_id, _prompt_hash(prompt))
+    _response_cache[key] = (response, time.time(), request_id)
+
 
 def _get_or_create_agent(session_id: str) -> Any:
     """Return the cached Agent for *session_id*, creating one if needed."""
@@ -45,8 +113,15 @@ def _reset_launch_guard(agent: Any) -> None:
     """Reset the LaunchGuardHook counters before a new invocation."""
     guard = getattr(agent, "_launch_guard", None)
     if guard is not None:
+        print(
+            f"=== LAUNCH_GUARD PRE-RESET: "
+            f"call_count={guard._launch_call_count}, "
+            f"total_launched={guard._total_launched}, "
+            f"target={guard._target_count}, "
+            f"fulfilled={guard._fulfilled} ==="
+        )
         guard.reset()
-        logger.debug("LaunchGuard reset for new invocation")
+        print("=== LAUNCH_GUARD RESET DONE ===")
 
 
 def _extract_text(result: Any) -> str:
@@ -70,6 +145,20 @@ async def invoke(payload: dict, context) -> dict:
     Requirements: 2.1, 2.2, 3.1, 3.2, 6.1, 7.1, 7.2, 7.3, 7.4
     """
     session_id: str = getattr(context, "session_id", None) or ""
+    current_request_id: str = BedrockAgentCoreContext.get_request_id() or ""
+
+    # Diagnostic: use print() to ensure visibility in CloudWatch
+    # regardless of logging configuration
+    print(
+        f"=== INVOKE ENTRY === session={session_id}, "
+        f"request_id={current_request_id}, "
+        f"payload_keys={list(payload.keys())}"
+    )
+
+    logger.info(
+        "=== invoke() called, session=%s, payload_keys=%s ===",
+        session_id, list(payload.keys()),
+    )
 
     # --- Authentication (Req 6.1) ---
     token = payload.get("token", "")
@@ -158,8 +247,23 @@ async def invoke(payload: dict, context) -> dict:
             user_id=user_id,
         ).model_dump()
 
-    # Reset launch guard counters for the new invocation (Req 3.7)
+    # --- Re-invocation detection (Req 3.7) ---
+    # AgentCore Runtime may re-invoke with the same session+prompt
+    # immediately after a successful completion.  Return the cached
+    # first response so the user sees the real result, not a stale
+    # "already launched" message from the second agent run.
+    cached_resp = _check_reinvoke_cache(session_id, prompt, current_request_id)
+    if cached_resp is not None:
+        print(
+            f"=== RETURNING CACHED RESPONSE === session={session_id}, "
+            f"request_id={current_request_id}"
+        )
+        return cached_resp
+
+    # Reset per-invocation launch guard counters (Req 3.7).
     _reset_launch_guard(agent)
+
+    print(f"=== CALLING agent(prompt), fulfilled={getattr(getattr(agent, '_launch_guard', None), '_fulfilled', 'N/A')} ===")
 
     try:
         result = agent(prompt)
@@ -173,6 +277,9 @@ async def invoke(payload: dict, context) -> dict:
         ).model_dump()
 
     resp = _build_response(result, session_id, user_id)
+
+    # Cache the response for re-invocation detection
+    _store_reinvoke_cache(session_id, prompt, resp, current_request_id)
 
     # Store user message + agent response to memory (Req 5.1, 5.2)
     _store_memory(

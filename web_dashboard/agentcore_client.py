@@ -17,14 +17,25 @@ import os
 from typing import Any
 
 import boto3
+from botocore.config import Config
 
 logger = logging.getLogger(__name__)
+
+# boto3 default read_timeout is 60s.  Launch operations routinely take
+# 60-120s (cross-region probe-and-fill + DynamoDB persist + finalize).
+# If the client times out mid-flight, the broken connection causes
+# AgentCore Runtime to re-invoke the agent, producing duplicate
+# launches.  A generous read timeout prevents this.
+_BOTO_CONFIG = Config(
+    read_timeout=500,       # ~8 min — enough for worst-case multi-region launch
+    retries={"max_attempts": 0},  # disable boto3 auto-retry to avoid duplicate invocations
+)
 
 
 def _get_client():
     """Create a boto3 bedrock-agentcore client."""
     region = os.environ.get("AGENTCORE_REGION", "us-west-2")
-    return boto3.client("bedrock-agentcore", region_name=region)
+    return boto3.client("bedrock-agentcore", region_name=region, config=_BOTO_CONFIG)
 
 
 def _get_agent_arn() -> str:
@@ -143,8 +154,11 @@ def _parse_response(response: dict) -> dict[str, Any]:
     UTF-8 decoder so that multi-byte characters (e.g. Chinese) split
     across chunk boundaries are handled correctly.
 
-    Once a complete JSON AgentResponse is detected, we stop reading
-    immediately to prevent the Agent from starting another execution cycle.
+    IMPORTANT: We always consume the stream fully before returning.
+    Closing the stream early causes AgentCore Runtime to re-invoke the
+    agent within the same session, leading to duplicate execution.
+    We capture the first complete JSON AgentResponse we see, then
+    drain the remaining stream data silently.
     """
     import codecs
 
@@ -154,6 +168,7 @@ def _parse_response(response: dict) -> dict[str, Any]:
         # Incremental UTF-8 decoder handles multi-byte chars split across chunks
         decoder = codecs.getincrementaldecoder("utf-8")("ignore")
         text_buf: list[str] = []
+        captured_result: dict[str, Any] | None = None
 
         for line in response["response"].iter_lines(chunk_size=4096):
             if not line:
@@ -165,21 +180,28 @@ def _parse_response(response: dict) -> dict[str, Any]:
             text_buf.append(decoded)
 
             # Try to parse accumulated content as JSON after each chunk.
-            raw = "".join(text_buf)
-            try:
-                result = json.loads(raw)
-                if isinstance(result, dict) and "status" in result:
-                    logger.info("Received complete AgentResponse, closing stream")
-                    return result
-            except (json.JSONDecodeError, ValueError):
-                continue
+            # Capture the first complete AgentResponse but keep draining.
+            if captured_result is None:
+                raw = "".join(text_buf)
+                try:
+                    result = json.loads(raw)
+                    if isinstance(result, dict) and "status" in result:
+                        captured_result = result
+                        logger.info(
+                            "Captured complete AgentResponse, draining remaining stream"
+                        )
+                except (json.JSONDecodeError, ValueError):
+                    continue
 
         # Flush any remaining bytes in the decoder
         tail = decoder.decode(b"", final=True)
         if tail:
             text_buf.append(tail)
 
-        # Fallback: stream ended, try to parse whatever we collected
+        if captured_result is not None:
+            return captured_result
+
+        # Fallback: stream ended without a valid JSON response
         raw = "".join(text_buf)
         try:
             return json.loads(raw)
