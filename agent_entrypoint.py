@@ -134,6 +134,61 @@ def _extract_text(result: Any) -> str:
     return "\n".join(parts) if parts else str(result)
 
 
+def _sanitize_messages(agent: Any) -> None:
+    """Ensure agent.messages has valid toolUse/toolResult pairing.
+
+    Bedrock ConverseStream requires that every user message containing
+    toolResult blocks has exactly as many results as the preceding
+    assistant message has toolUse blocks.  If a previous invocation
+    was interrupted (exception, timeout, re-invocation race), the
+    messages list can end up in an inconsistent state.
+
+    This function walks the messages and removes any trailing messages
+    that would violate the pairing constraint.  It is intentionally
+    conservative: it only trims from the end, never modifies middle
+    messages.
+    """
+    messages = getattr(agent, "messages", None)
+    if not messages:
+        return
+
+    # Walk backwards and remove trailing messages that are broken
+    while messages:
+        last = messages[-1]
+        role = last.get("role", "")
+        content = last.get("content", [])
+
+        # If the last message is an assistant with toolUse but no
+        # following toolResult → remove it (incomplete turn)
+        if role == "assistant" and any("toolUse" in c for c in content):
+            print(f"=== SANITIZE: removing trailing assistant toolUse message ===")
+            messages.pop()
+            continue
+
+        # If the last message is a user with toolResult, verify it
+        # matches the preceding assistant's toolUse count
+        if role == "user" and any("toolResult" in c for c in content):
+            tool_result_count = sum(1 for c in content if "toolResult" in c)
+
+            # Find the preceding assistant message
+            if len(messages) >= 2:
+                prev = messages[-2]
+                prev_content = prev.get("content", [])
+                if prev.get("role") == "assistant":
+                    tool_use_count = sum(1 for c in prev_content if "toolUse" in c)
+                    if tool_result_count != tool_use_count:
+                        print(
+                            f"=== SANITIZE: toolResult count ({tool_result_count}) != "
+                            f"toolUse count ({tool_use_count}), removing last 2 messages ==="
+                        )
+                        messages.pop()  # remove mismatched toolResult
+                        messages.pop()  # remove the toolUse that has no valid result
+                        continue
+
+        # No issues found at the tail
+        break
+
+
 
 @app.entrypoint
 async def invoke(payload: dict, context) -> dict:
@@ -262,6 +317,10 @@ async def invoke(payload: dict, context) -> dict:
 
     # Reset per-invocation launch guard counters (Req 3.7).
     _reset_launch_guard(agent)
+
+    # Sanitize messages to fix any toolUse/toolResult mismatches
+    # left by a previous interrupted invocation (Req 3.7).
+    _sanitize_messages(agent)
 
     print(f"=== CALLING agent(prompt), fulfilled={getattr(getattr(agent, '_launch_guard', None), '_fulfilled', 'N/A')} ===")
 
