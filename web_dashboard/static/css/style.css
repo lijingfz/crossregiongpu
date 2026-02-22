@@ -129,3 +129,31 @@ body {
 }
 .btn-send:hover { background: #0958d9; }
 .btn-send:disabled { background: #a0c4ff; cursor: not-allowed; }
+
+/* --- Tool-call progress card --- */
+.tool-card {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #f6f8fa;
+  border: 1px solid #e1e4e8;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #586069;
+  animation: tool-pulse 1.5s ease-in-out infinite;
+}
+.tool-card.done {
+  animation: none;
+  opacity: 0.6;
+  border-color: #c8e6c9;
+  background: #f1f8e9;
+  color: #2e7d32;
+}
+.tool-icon { font-size: 16px; }
+.tool-label { font-family: "SF Mono", Menlo, Consolas, monospace; }
+@keyframes tool-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

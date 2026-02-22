@@ -16,6 +16,35 @@
       });
   let pendingApproval = false;
 
+  // --- Local message cache (persisted to localStorage across page reloads) ---
+  var _CACHE_KEY = 'gpu_msg_cache';
+
+  function _loadCache() {
+    try {
+      var raw = localStorage.getItem(_CACHE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) { return {}; }
+  }
+
+  function _saveCache(cache) {
+    try { localStorage.setItem(_CACHE_KEY, JSON.stringify(cache)); } catch (e) { /* quota */ }
+  }
+
+  function cacheMessage(role, content, isError) {
+    var cache = _loadCache();
+    if (!cache[sessionId]) cache[sessionId] = [];
+    cache[sessionId].push({ role: role, content: content, isError: !!isError });
+    _saveCache(cache);
+  }
+
+  function restoreFromCache(sid) {
+    var cache = _loadCache();
+    var cached = cache[sid];
+    if (!cached || cached.length === 0) return false;
+    cached.forEach(function (m) { appendMessage(m.role, m.content, m.isError); });
+    return true;
+  }
+
   // --- DOM refs ---
   const messagesEl = document.getElementById('messages');
   const loadingEl = document.getElementById('loading');
@@ -74,6 +103,12 @@
     scrollToBottom();
   }
 
+  /** Append + cache (use for new messages from user actions, not replay) */
+  function addMessage(role, content, isError) {
+    cacheMessage(role, content, isError);
+    appendMessage(role, content, isError);
+  }
+
   function appendApprovalCard(interrupts) {
     interrupts.forEach(function (intr) {
       var card = document.createElement('div');
@@ -105,49 +140,130 @@
     scrollToBottom();
   }
 
+  // --- Tool-call progress UI helpers ---
+  var _toolCardEl = null;  // current in-flight tool status card
+
+  function showToolCard(toolName) {
+    // Create or update the tool-progress card in the messages area
+    if (!_toolCardEl) {
+      _toolCardEl = document.createElement('div');
+      _toolCardEl.className = 'tool-card';
+      messagesEl.appendChild(_toolCardEl);
+    }
+    _toolCardEl.innerHTML = '';
+    var icon = document.createElement('span');
+    icon.className = 'tool-icon';
+    icon.textContent = '🔧';
+    var label = document.createElement('span');
+    label.className = 'tool-label';
+    label.textContent = '调用 ' + toolName + ' ...';
+    _toolCardEl.appendChild(icon);
+    _toolCardEl.appendChild(label);
+    _toolCardEl.classList.remove('done');
+    scrollToBottom();
+  }
+
+  function finishToolCard(toolName) {
+    if (_toolCardEl) {
+      var label = _toolCardEl.querySelector('.tool-label');
+      if (label) label.textContent = toolName + ' ✓';
+      _toolCardEl.classList.add('done');
+      _toolCardEl = null;  // next tool gets a new card
+    }
+  }
+
+  function clearToolCards() {
+    _toolCardEl = null;
+  }
+
   // --- API calls ---
   async function sendMessage() {
     var text = inputEl.value.trim();
     if (!text || pendingApproval) return;
 
-    appendMessage('user', text);
+    addMessage('user', text);
     inputEl.value = '';
     setInputEnabled(false);
     showLoading(true);
+    clearToolCards();
+
+    var url = '/api/chat/stream?session_id=' + encodeURIComponent(sessionId)
+            + '&message=' + encodeURIComponent(text);
 
     try {
-      var res = await fetch('/api/chat/send', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ session_id: sessionId, message: text }),
-      });
+      var res = await fetch(url, { headers: authHeaders() });
       if (handleUnauthorized(res)) return;
-      var body = await res.json();
+
       showLoading(false);
 
-      if (body.status === 'error') {
-        appendMessage('assistant', body.message || '请求失败', true);
-        setInputEnabled(true);
-        return;
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = '';
+
+      while (true) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+
+        // Process complete SSE lines
+        var lines = buffer.split('\n');
+        buffer = lines.pop();  // keep incomplete line in buffer
+
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line.startsWith('data: ')) continue;
+          var payload;
+          try { payload = JSON.parse(line.substring(6)); } catch (e) { continue; }
+
+          if (payload.type === 'tool_start') {
+            showToolCard(payload.tool);
+          } else if (payload.type === 'tool_end') {
+            finishToolCard(payload.tool);
+          } else if (payload.type === 'result') {
+            _handleResult(payload.data || {});
+          } else if (payload.type === 'error') {
+            addMessage('assistant', payload.message || 'Agent 错误', true);
+            setInputEnabled(true);
+          }
+        }
       }
 
-      var data = body.data || {};
-      if (data.agent_status === 'completed') {
-        appendMessage('assistant', data.result || '');
-        setInputEnabled(true);
-      } else if (data.agent_status === 'approval_required') {
-        pendingApproval = true;
-        setInputEnabled(false);
-        appendApprovalCard(data.interrupts || []);
-      } else if (data.agent_status === 'error') {
-        appendMessage('assistant', data.error_message || 'Agent 错误', true);
-        setInputEnabled(true);
+      // Process any remaining buffer
+      if (buffer.trim().startsWith('data: ')) {
+        try {
+          var last = JSON.parse(buffer.trim().substring(6));
+          if (last.type === 'result') _handleResult(last.data || {});
+          else if (last.type === 'error') addMessage('assistant', last.message || 'Agent 错误', true);
+        } catch (e) { /* ignore */ }
       }
-      // Refresh sidebar to show this session
+
       loadRecentSessions();
     } catch (err) {
       showLoading(false);
-      appendMessage('assistant', '网络错误，请稍后重试', true);
+      addMessage('assistant', '网络错误，请稍后重试', true);
+      setInputEnabled(true);
+    }
+  }
+
+  function _handleResult(data) {
+    var status = data.status || (data.agent_status || '');
+    // AgentResponse from entrypoint uses "status", _build_chat_response uses "agent_status"
+    if (status === 'completed') {
+      addMessage('assistant', data.result || '');
+      setInputEnabled(true);
+    } else if (status === 'approval_required') {
+      pendingApproval = true;
+      setInputEnabled(false);
+      appendApprovalCard(data.interrupts || []);
+    } else if (status === 'error') {
+      addMessage('assistant', data.error_message || data.message || 'Agent 错误', true);
+      setInputEnabled(true);
+    } else if (status === 'unauthorized') {
+      addMessage('assistant', data.message || '认证失败', true);
+      setInputEnabled(true);
+    } else {
+      // Unknown status — show result if present
+      if (data.result) addMessage('assistant', data.result);
       setInputEnabled(true);
     }
   }
@@ -172,19 +288,19 @@
       cardEl.style.opacity = '0.6';
 
       if (body.status === 'error') {
-        appendMessage('assistant', body.message || '审批失败', true);
+        addMessage('assistant', body.message || '审批失败', true);
       } else {
         var data = body.data || {};
         if (data.agent_status === 'completed') {
-          appendMessage('assistant', data.result || '');
+          addMessage('assistant', data.result || '');
         } else if (data.agent_status === 'error') {
-          appendMessage('assistant', data.error_message || 'Agent 错误', true);
+          addMessage('assistant', data.error_message || 'Agent 错误', true);
         }
       }
       setInputEnabled(true);
     } catch (err) {
       showLoading(false);
-      appendMessage('assistant', '网络错误，请稍后重试', true);
+      addMessage('assistant', '网络错误，请稍后重试', true);
       pendingApproval = false;
       setInputEnabled(true);
     }
@@ -197,9 +313,9 @@
       });
       if (handleUnauthorized(res)) return;
       var body = await res.json();
-      if (body.status === 'success' && body.data && body.data.messages) {
+      if (body.status === 'success' && body.data && body.data.messages && body.data.messages.length > 0) {
         body.data.messages.forEach(function (m) {
-          appendMessage(m.role, m.content);
+          addMessage(m.role, m.content);
         });
       }
     } catch (err) {
@@ -269,7 +385,10 @@
     messagesEl.innerHTML = '';
     pendingApproval = false;
     setInputEnabled(true);
-    loadHistory();
+    // Restore from local cache first; fall back to server history
+    if (!restoreFromCache(sessionId)) {
+      loadHistory();
+    }
     // Update active state in sidebar
     var items = sessionListEl.querySelectorAll('li');
     items.forEach(function (li) {

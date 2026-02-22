@@ -9,14 +9,16 @@ Requirements: 2.1, 2.5, 3.2, 3.3, 4.1, 4.3, 4.4, 6.2, 6.3, 6.4
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 
-from web_dashboard.agentcore_client import invoke_agent, invoke_approval
+from web_dashboard.agentcore_client import invoke_agent, invoke_agent_stream, invoke_approval
 from web_dashboard.dependencies import get_current_user
 from web_dashboard.models import (
     ApiResponse,
@@ -110,6 +112,69 @@ async def send_message(
     return _build_chat_response(resp)
 
 
+@router.get("/stream")
+async def stream_message(
+    request: Request,
+    session_id: str = Query(...),
+    message: str = Query(...),
+    user: dict = Depends(get_current_user),
+) -> StreamingResponse:
+    """SSE endpoint that streams tool-call progress while the agent works.
+
+    The frontend connects via ``fetch()`` + ``ReadableStream`` and
+    receives newline-delimited SSE events:
+
+    - ``{"type":"tool_start","tool":"ec2_launch_instances"}``
+    - ``{"type":"tool_end","tool":"ec2_launch_instances"}``
+    - ``{"type":"result","data":{...}}``  (final AgentResponse)
+    - ``{"type":"error","message":"..."}``
+
+    Requirements: 2.1, 2.5, 6.2
+    """
+    if not message or not message.strip():
+        async def _empty_err():
+            yield _sse_encode({"type": "error", "message": "消息不能为空"})
+        return StreamingResponse(_empty_err(), media_type="text/event-stream")
+
+    token = _make_agent_token(user)
+
+    # Record session for sidebar
+    try:
+        record_session(
+            session_id=session_id,
+            user_id=user.get("user_id", ""),
+            preview=message,
+        )
+    except Exception:
+        logger.debug("Session registry update failed", exc_info=True)
+
+    async def _event_generator():
+        try:
+            for event in invoke_agent_stream(
+                session_id=session_id,
+                prompt=message,
+                token=token,
+            ):
+                yield _sse_encode(event)
+        except Exception as exc:
+            logger.exception("SSE stream error, session=%s", session_id)
+            yield _sse_encode({"type": "error", "message": str(exc)})
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse_encode(data: dict) -> str:
+    """Format a dict as an SSE ``data:`` line."""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 @router.post("/approve")
 async def approve(
     request: ApprovalRequest,
@@ -162,11 +227,38 @@ async def get_history(
 
     messages: list[dict] = []
     for event in events:
-        if isinstance(event, dict):
-            for msg in event.get("messages", []):
-                content, role_raw = msg if isinstance(msg, (list, tuple)) else ("", "")
-                role = "user" if str(role_raw).upper() == "USER" else "assistant"
-                messages.append({"role": role, "content": str(content), "timestamp": ""})
+        if not isinstance(event, dict):
+            continue
+
+        # AgentCore Memory stores messages in "payload" field with format:
+        # [{"conversational": {"content": {"text": "..."}, "role": "USER"}}, ...]
+        # Also handle legacy "messages" field for backward compatibility.
+        payload = event.get("payload", event.get("messages", []))
+        if not isinstance(payload, list):
+            continue
+
+        for item in payload:
+            if isinstance(item, dict):
+                # Format 1: AgentCore Memory conversational format
+                conv = item.get("conversational")
+                if conv and isinstance(conv, dict):
+                    content_obj = conv.get("content", {})
+                    text = content_obj.get("text", "") if isinstance(content_obj, dict) else str(content_obj)
+                    role_raw = conv.get("role", "")
+                # Format 2: flat dict {"content": ..., "role": ...}
+                else:
+                    text = item.get("content", "") or item.get("text", "")
+                    role_raw = item.get("role", "")
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                # Format 3: tuple (content, role)
+                text, role_raw = item[0], item[1]
+            else:
+                continue
+
+            if not text:
+                continue
+            role = "user" if str(role_raw).upper() == "USER" else "assistant"
+            messages.append({"role": role, "content": str(text), "timestamp": ""})
 
     return ApiResponse(
         status="success",

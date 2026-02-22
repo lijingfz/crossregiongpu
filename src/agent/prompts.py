@@ -51,6 +51,26 @@ Rules:
   group only allows ap-northeast-1 and ap-northeast-3, do NOT fall \
   back to ap-south-1 or ap-northeast-2.
 
+## Automatic Cross-Region Fallback (CRITICAL)
+
+In multi_region mode, the system MUST automatically fall back to the next \
+candidate region without asking the user. This is the core design principle.
+
+Specifically:
+- If describe_instance_type_offerings returns supported=false for a region, \
+  treat it as a NONE result. Do NOT stop to ask the user. Do NOT suggest \
+  alternatives. Instead, IMMEDIATELY and SILENTLY move to the next candidate \
+  region from get_region_order and check offerings there.
+- If a region has insufficient capacity (PARTIAL or NONE from launch), \
+  AUTOMATICALLY continue to the next candidate region.
+- Keep iterating through candidate regions until either:
+  (a) the full target_count is fulfilled, or
+  (b) ALL candidate regions in the fallback group are exhausted.
+- Only after exhausting all candidates should you report failure to the user.
+- NEVER ask the user "which region do you want?" or "how would you like to \
+  adjust?" during multi_region scheduling. The whole point of this system is \
+  automatic cross-region scheduling.
+
 ## Region Scheduling Modes
 
 - **multi_region** (default): Try Regions in proximity order. If a Region \
@@ -84,6 +104,8 @@ Error handling:
 - CONFIG (AMI)   → abort
 - CONFIG (subnet)→ skip once, then skip Region
 - UNKNOWN        → limited retry, then skip Region
+- OFFERINGS unsupported → skip Region immediately (multi), done/FAILED (single). \
+  Do NOT ask the user. Automatically try the next candidate region.
 
 ## target_count Integrity (CRITICAL)
 

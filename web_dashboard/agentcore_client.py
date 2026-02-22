@@ -11,10 +11,12 @@ Environment variables:
 
 from __future__ import annotations
 
+import codecs
 import json
 import logging
 import os
-from typing import Any
+import re
+from typing import Any, Generator
 
 import boto3
 from botocore.config import Config
@@ -29,6 +31,17 @@ logger = logging.getLogger(__name__)
 _BOTO_CONFIG = Config(
     read_timeout=500,       # ~8 min — enough for worst-case multi-region launch
     retries={"max_attempts": 0},  # disable boto3 auto-retry to avoid duplicate invocations
+)
+
+# Regex patterns for detecting tool-use events in the agent stream.
+# The agent (Strands/Bedrock Claude) emits toolUse blocks in the
+# streaming response.  We look for JSON fragments that indicate a
+# tool call start or result.
+_TOOL_USE_START_RE = re.compile(
+    r'"toolUse"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"', re.DOTALL
+)
+_TOOL_RESULT_RE = re.compile(
+    r'"toolResult"\s*:\s*\{', re.DOTALL
 )
 
 
@@ -91,6 +104,115 @@ def invoke_agent(
     )
 
     return _parse_response(response)
+
+
+def invoke_agent_stream(
+    *,
+    session_id: str,
+    prompt: str,
+    token: str = "",
+) -> Generator[dict[str, Any], None, None]:
+    """Stream events from the AgentCore Runtime agent.
+
+    Yields SSE-compatible event dicts as the agent processes the request.
+    Event types:
+      - ``{"type": "tool_start", "tool": "<name>"}``
+      - ``{"type": "tool_end", "tool": "<name>"}``
+      - ``{"type": "text", "content": "<partial text>"}``
+      - ``{"type": "result", "data": <AgentResponse dict>}``
+      - ``{"type": "error", "message": "..."}``
+    """
+    client = _get_client()
+    agent_arn = _get_agent_arn()
+
+    payload = json.dumps({
+        "prompt": prompt,
+        "token": token,
+    }).encode()
+
+    logger.info(
+        "Invoking AgentCore Runtime (stream): arn=%s, session=%s",
+        agent_arn, session_id,
+    )
+
+    try:
+        response = client.invoke_agent_runtime(
+            agentRuntimeArn=agent_arn,
+            runtimeSessionId=session_id,
+            payload=payload,
+        )
+    except Exception as exc:
+        yield {"type": "error", "message": str(exc)}
+        return
+
+    content_type = response.get("contentType", "")
+
+    if "text/event-stream" not in content_type:
+        # Non-streaming response — parse and yield as single result
+        parsed = _parse_response(response)
+        yield {"type": "result", "data": parsed}
+        return
+
+    # Stream processing — yield intermediate tool events
+    decoder = codecs.getincrementaldecoder("utf-8")("ignore")
+    text_buf: list[str] = []
+    captured_result: dict[str, Any] | None = None
+    current_tool: str | None = None
+
+    for line in response["response"].iter_lines(chunk_size=4096):
+        if not line:
+            continue
+        decoded = decoder.decode(line if isinstance(line, bytes) else line.encode())
+        if decoded.startswith("data: "):
+            decoded = decoded[6:]
+        text_buf.append(decoded)
+
+        # Detect tool_start events
+        tool_match = _TOOL_USE_START_RE.search(decoded)
+        if tool_match:
+            tool_name = tool_match.group(1)
+            current_tool = tool_name
+            yield {"type": "tool_start", "tool": tool_name}
+            continue
+
+        # Detect tool_result events (tool finished)
+        if _TOOL_RESULT_RE.search(decoded) and current_tool:
+            yield {"type": "tool_end", "tool": current_tool}
+            current_tool = None
+            continue
+
+        # Try to parse accumulated content as complete AgentResponse
+        if captured_result is None:
+            raw = "".join(text_buf)
+            try:
+                result = json.loads(raw)
+                if isinstance(result, dict) and "status" in result:
+                    captured_result = result
+                    logger.info(
+                        "Captured complete AgentResponse (stream), draining"
+                    )
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+    # Flush decoder
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        text_buf.append(tail)
+
+    # Close any open tool
+    if current_tool:
+        yield {"type": "tool_end", "tool": current_tool}
+
+    if captured_result is not None:
+        yield {"type": "result", "data": captured_result}
+        return
+
+    # Fallback
+    raw = "".join(text_buf)
+    try:
+        yield {"type": "result", "data": json.loads(raw)}
+    except (json.JSONDecodeError, ValueError):
+        yield {"type": "result", "data": {"status": "completed", "result": raw}}
 
 
 def invoke_approval(

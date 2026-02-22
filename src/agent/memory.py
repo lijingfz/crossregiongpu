@@ -22,11 +22,41 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _get_memory_id() -> str:
+    """Return the Memory resource ID from env var or dev.yaml fallback."""
+    mid = os.environ.get("MEMORY_ID", "")
+    if mid:
+        return mid
+    try:
+        import yaml
+        with open("config/environments/dev.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        mid = cfg.get("memory_id", "")
+    except Exception:
+        pass
+    return mid
+
+
+def _get_memory_region() -> str:
+    """Return the Memory region from env var or dev.yaml fallback."""
+    region = os.environ.get("MEMORY_REGION", "")
+    if region:
+        return region
+    try:
+        import yaml
+        with open("config/environments/dev.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        region = cfg.get("memory_region", "")
+    except Exception:
+        pass
+    return region or "us-west-2"
+
+
 def _get_memory_client() -> Any:
     """Lazily import and return a ``MemoryClient`` instance."""
     from bedrock_agentcore.memory import MemoryClient
 
-    region = os.environ.get("MEMORY_REGION", "us-west-2")
+    region = _get_memory_region()
     return MemoryClient(region_name=region)
 
 
@@ -54,7 +84,7 @@ def store_conversation(
         ``True`` if the event was stored successfully, ``False`` otherwise.
         Failures are logged but never raised (Req 5.3).
     """
-    memory_id = os.environ.get("MEMORY_ID", "")
+    memory_id = _get_memory_id()
     if not memory_id:
         logger.warning("MEMORY_ID not configured – skipping conversation storage")
         return False
@@ -98,7 +128,7 @@ def retrieve_conversation(
     list[dict]
         List of event dicts, or an empty list on failure (Req 5.4).
     """
-    memory_id = os.environ.get("MEMORY_ID", "")
+    memory_id = _get_memory_id()
     if not memory_id:
         logger.warning("MEMORY_ID not configured – cannot retrieve conversation")
         return []
@@ -143,7 +173,7 @@ def search_ltm(
 
     Requirements: 5.5
     """
-    memory_id = os.environ.get("MEMORY_ID", "")
+    memory_id = _get_memory_id()
     if not memory_id:
         logger.warning("MEMORY_ID not configured – cannot search LTM")
         return []

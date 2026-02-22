@@ -174,7 +174,51 @@ else
   log "WARN: Could not determine execution role from .bedrock_agentcore.yaml, skipping Memory IAM policy"
 fi
 
-# ── Step 3: Launch on AgentCore ─────────────────────────────────────────
+# ── Step 3: Patch dockerignore template to exclude project-specific dirs ─
+
+# AgentCore CLI uses a built-in dockerignore.template to decide which files
+# go into the deployment package.  It does NOT read .gitignore or .dockerignore.
+# We temporarily append project-specific exclusions so that large directories
+# like 01-network/ (Terraform, ~683 MB) are not packaged.
+
+DOCKERIGNORE_TEMPLATE=$("$PYTHON" -c "
+from importlib.resources import files
+print(files('bedrock_agentcore_starter_toolkit').joinpath('utils/runtime/templates/dockerignore.template'))
+" 2>/dev/null || echo "")
+
+DOCKERIGNORE_PATCHED=false
+DOCKERIGNORE_BACKUP=""
+
+if [[ -n "$DOCKERIGNORE_TEMPLATE" && -f "$DOCKERIGNORE_TEMPLATE" ]]; then
+  DOCKERIGNORE_BACKUP="${DOCKERIGNORE_TEMPLATE}.bak"
+  cp "$DOCKERIGNORE_TEMPLATE" "$DOCKERIGNORE_BACKUP"
+
+  cat >> "$DOCKERIGNORE_TEMPLATE" <<'EXTRA'
+
+# --- gpu-scheduler project-specific exclusions (auto-appended by deploy script) ---
+01-network/
+infra/
+scripts/
+.hypothesis/
+.kiro/
+*.tfstate
+*.tfstate.backup
+EXTRA
+
+  DOCKERIGNORE_PATCHED=true
+  log "Patched dockerignore.template with project exclusions"
+fi
+
+# ── Step 4: Clear cached deployment package ─────────────────────────────
+
+CACHE_DIR="${PROJECT_ROOT}/.bedrock_agentcore/agent_entrypoint"
+if [[ -d "$CACHE_DIR" ]]; then
+  log "Clearing cached deployment package to force rebuild..."
+  rm -rf "$CACHE_DIR"
+  log "Cache cleared: ${CACHE_DIR}"
+fi
+
+# ── Step 5: Launch on AgentCore ─────────────────────────────────────────
 
 log "Launching agent on AgentCore Runtime..."
 
@@ -200,6 +244,18 @@ agentcore launch \
   --env MEMORY_ID="${MEMORY_ID}" \
   --env MEMORY_REGION="${MEMORY_REGION}" \
   --env AUTH_SECRET_KEY="${AUTH_SECRET_KEY}"
+LAUNCH_EXIT=$?
+
+# ── Step 6: Restore dockerignore template ───────────────────────────────
+
+if [[ "$DOCKERIGNORE_PATCHED" == "true" && -n "$DOCKERIGNORE_BACKUP" && -f "$DOCKERIGNORE_BACKUP" ]]; then
+  mv "$DOCKERIGNORE_BACKUP" "$DOCKERIGNORE_TEMPLATE"
+  log "Restored original dockerignore.template"
+fi
+
+if [[ $LAUNCH_EXIT -ne 0 ]]; then
+  die "agentcore launch failed (exit code: $LAUNCH_EXIT)"
+fi
 
 log "AgentCore deployment complete for environment: ${ENV}"
 log ""

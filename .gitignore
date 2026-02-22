@@ -12,7 +12,8 @@ dist/
 build/
 
 # Terraform
-.terraform/
+**/.terraform/
+01-network/
 *.tfstate
 *.tfstate.backup
 *.tfvars
