@@ -291,6 +291,7 @@ class TestProperty7ExceptionErrorResponse:
     ):
         """**Validates: Requirements 7.3**"""
         import asyncio
+        import json as _json
         import os
 
         import jwt as pyjwt
@@ -300,6 +301,10 @@ class TestProperty7ExceptionErrorResponse:
         class ExplodingAgent:
             def __call__(self, prompt, **kw):
                 raise RuntimeError(error_msg)
+
+            async def stream_async(self, prompt, **kw):
+                raise RuntimeError(error_msg)
+                yield  # make it an async generator  # noqa: E501
 
         _session_agents[session_id] = ExplodingAgent()
 
@@ -313,12 +318,24 @@ class TestProperty7ExceptionErrorResponse:
 
             ctx = type("Ctx", (), {"session_id": session_id})()
 
+            async def _collect():
+                items = []
+                async for chunk in invoke({"prompt": "hello", "token": token}, ctx):
+                    items.append(chunk)
+                return items
+
             loop = asyncio.new_event_loop()
             try:
-                resp = loop.run_until_complete(invoke({"prompt": "hello", "token": token}, ctx))
+                items = loop.run_until_complete(_collect())
             finally:
                 loop.close()
 
+            # The last yielded item should be the error AgentResponse dict
+            assert len(items) >= 1
+            resp = items[-1]
+            # invoke() now yields dicts, not JSON strings
+            if isinstance(resp, str):
+                resp = _json.loads(resp)
             parsed = AgentResponse(**resp)
             assert parsed.status == "error"
             assert parsed.message is not None

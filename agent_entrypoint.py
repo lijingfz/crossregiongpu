@@ -191,8 +191,16 @@ def _sanitize_messages(agent: Any) -> None:
 
 
 @app.entrypoint
-async def invoke(payload: dict, context) -> dict:
-    """AgentCore entrypoint function.
+async def invoke(payload: dict, context):
+    """AgentCore entrypoint function (streaming).
+
+    Uses ``agent.stream_async()`` + ``yield`` so that AgentCore Runtime
+    returns ``text/event-stream`` to the caller.  Intermediate events
+    carry tool-call progress; the final event is the complete
+    AgentResponse dict.
+
+    All yields are dicts (not JSON strings) — AgentCore Runtime
+    serializes them into SSE ``data:`` lines automatically.
 
     Accepts either a ``prompt`` (new user message) or
     ``approval_responses`` (human approval decisions) in the payload.
@@ -202,8 +210,6 @@ async def invoke(payload: dict, context) -> dict:
     session_id: str = getattr(context, "session_id", None) or ""
     current_request_id: str = BedrockAgentCoreContext.get_request_id() or ""
 
-    # Diagnostic: use print() to ensure visibility in CloudWatch
-    # regardless of logging configuration
     print(
         f"=== INVOKE ENTRY === session={session_id}, "
         f"request_id={current_request_id}, "
@@ -220,11 +226,12 @@ async def invoke(payload: dict, context) -> dict:
     try:
         user_info = validate_token(token)
     except AuthenticationError as exc:
-        return AgentResponse(
+        yield AgentResponse(
             status="unauthorized",
             session_id=session_id,
             message=str(exc),
         ).model_dump()
+        return
 
     user_id = user_info.get("user_id", "")
 
@@ -233,17 +240,17 @@ async def invoke(payload: dict, context) -> dict:
         agent = _get_or_create_agent(session_id)
     except Exception as exc:
         logger.exception("Failed to create agent for session %s", session_id)
-        return AgentResponse(
+        yield AgentResponse(
             status="error",
             session_id=session_id,
             message=f"Agent creation failed: {exc}",
             user_id=user_id,
         ).model_dump()
+        return
 
     # --- Route: approval_responses (Req 3.2, 3.3) ---
     approval_responses = payload.get("approval_responses")
     if approval_responses is not None:
-        # Store inbound approval response to memory (Req 5.1, 5.2)
         _store_memory(
             session_id=session_id,
             user_id=user_id,
@@ -252,7 +259,6 @@ async def invoke(payload: dict, context) -> dict:
         )
 
         try:
-            # Restore interrupt state if it was lost between requests
             _restore_interrupt_state(agent, session_id)
 
             interrupt_responses = [
@@ -276,12 +282,13 @@ async def invoke(payload: dict, context) -> dict:
             result = agent(interrupt_responses)
         except Exception as exc:
             logger.exception("Agent error during approval resume, session=%s", session_id)
-            return AgentResponse(
+            yield AgentResponse(
                 status="error",
                 session_id=session_id,
                 message=str(exc),
                 user_id=user_id,
             ).model_dump()
+            return
 
         resp = _build_response(result, session_id, user_id)
         _store_memory(
@@ -290,30 +297,29 @@ async def invoke(payload: dict, context) -> dict:
             agent_content=resp.get("result", resp.get("message", "")),
             message_type="agent_response",
         )
-        return resp
+        yield resp
+        return
 
     # --- Route: prompt (Req 2.2) ---
     prompt = payload.get("prompt")
     if not prompt:
-        return AgentResponse(
+        yield AgentResponse(
             status="error",
             session_id=session_id,
             message="Payload must contain 'prompt' or 'approval_responses'",
             user_id=user_id,
         ).model_dump()
+        return
 
     # --- Re-invocation detection (Req 3.7) ---
-    # AgentCore Runtime may re-invoke with the same session+prompt
-    # immediately after a successful completion.  Return the cached
-    # first response so the user sees the real result, not a stale
-    # "already launched" message from the second agent run.
     cached_resp = _check_reinvoke_cache(session_id, prompt, current_request_id)
     if cached_resp is not None:
         print(
             f"=== RETURNING CACHED RESPONSE === session={session_id}, "
             f"request_id={current_request_id}"
         )
-        return cached_resp
+        yield cached_resp
+        return
 
     # Reset per-invocation launch guard counters (Req 3.7).
     _reset_launch_guard(agent)
@@ -322,25 +328,76 @@ async def invoke(payload: dict, context) -> dict:
     # left by a previous interrupted invocation (Req 3.7).
     _sanitize_messages(agent)
 
-    print(f"=== CALLING agent(prompt), fulfilled={getattr(getattr(agent, '_launch_guard', None), '_fulfilled', 'N/A')} ===")
+    print(f"=== CALLING agent.stream_async(prompt), fulfilled={getattr(getattr(agent, '_launch_guard', None), '_fulfilled', 'N/A')} ===")
+
+    # --- Streaming prompt execution ---
+    # Use stream_async to yield intermediate tool-call progress events.
+    # Each yielded dict becomes an SSE "data:" line in the
+    # text/event-stream response that AgentCore Runtime sends to the caller.
+    #
+    # Strands stream_async event types (from SDK source):
+    #   ToolUseStreamEvent: {"type":"tool_use_stream", "current_tool_use":{...}, "delta":...}
+    #   TextStreamEvent:    {"data": "text...", "delta": ...}
+    #   AgentResultEvent:   {"result": AgentResult}  ← final event
+    result = None
+    active_tool: str | None = None
 
     try:
-        result = agent(prompt)
+        stream = agent.stream_async(prompt)
+        async for event in stream:
+            if not isinstance(event, dict):
+                continue
+
+            # --- Tool-call progress ---
+            tool_use = event.get("current_tool_use")
+            if isinstance(tool_use, dict):
+                tool_name = tool_use.get("name", "")
+                if tool_name and tool_name != active_tool:
+                    if active_tool:
+                        yield {"type": "tool_end", "tool": active_tool}
+                    active_tool = tool_name
+                    yield {"type": "tool_start", "tool": tool_name}
+
+            # --- Check for final AgentResult event ---
+            # AgentResultEvent has {"result": AgentResult} — no "complete" key
+            agent_result = event.get("result")
+            if agent_result is not None:
+                if active_tool:
+                    yield {"type": "tool_end", "tool": active_tool}
+                    active_tool = None
+                result = agent_result
+
     except Exception as exc:
-        logger.exception("Agent error, session=%s", session_id)
-        return AgentResponse(
+        logger.exception("Agent stream error, session=%s", session_id)
+        if active_tool:
+            yield {"type": "tool_end", "tool": active_tool}
+        yield AgentResponse(
             status="error",
             session_id=session_id,
             message=str(exc),
             user_id=user_id,
         ).model_dump()
+        return
 
-    resp = _build_response(result, session_id, user_id)
+    # Close any dangling tool card
+    if active_tool:
+        yield {"type": "tool_end", "tool": active_tool}
+
+    # Build final response
+    if result is None:
+        resp = AgentResponse(
+            status="error",
+            session_id=session_id,
+            message="Agent stream ended without a result",
+            user_id=user_id,
+        ).model_dump()
+    else:
+        resp = _build_response(result, session_id, user_id)
 
     # Cache the response for re-invocation detection
     _store_reinvoke_cache(session_id, prompt, resp, current_request_id)
 
-    # Store user message + agent response to memory (Req 5.1, 5.2)
+    # Store to memory
     _store_memory(
         session_id=session_id,
         user_id=user_id,
@@ -349,7 +406,8 @@ async def invoke(payload: dict, context) -> dict:
         message_type="user_message" if resp.get("status") != "approval_required" else "approval_request",
     )
 
-    return resp
+    # Yield the final AgentResponse as the last SSE event
+    yield resp
 
 
 def _store_memory(

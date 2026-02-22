@@ -15,7 +15,6 @@ import codecs
 import json
 import logging
 import os
-import re
 from typing import Any, Generator
 
 import boto3
@@ -31,17 +30,6 @@ logger = logging.getLogger(__name__)
 _BOTO_CONFIG = Config(
     read_timeout=500,       # ~8 min — enough for worst-case multi-region launch
     retries={"max_attempts": 0},  # disable boto3 auto-retry to avoid duplicate invocations
-)
-
-# Regex patterns for detecting tool-use events in the agent stream.
-# The agent (Strands/Bedrock Claude) emits toolUse blocks in the
-# streaming response.  We look for JSON fragments that indicate a
-# tool call start or result.
-_TOOL_USE_START_RE = re.compile(
-    r'"toolUse"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"', re.DOTALL
-)
-_TOOL_RESULT_RE = re.compile(
-    r'"toolResult"\s*:\s*\{', re.DOTALL
 )
 
 
@@ -114,11 +102,14 @@ def invoke_agent_stream(
 ) -> Generator[dict[str, Any], None, None]:
     """Stream events from the AgentCore Runtime agent.
 
-    Yields SSE-compatible event dicts as the agent processes the request.
-    Event types:
+    The entrypoint uses ``yield`` (async generator) so AgentCore
+    Runtime returns ``text/event-stream``.  Each SSE ``data:`` line is
+    a JSON string — either a tool-progress event or the final
+    AgentResponse.
+
+    Yields SSE-compatible event dicts:
       - ``{"type": "tool_start", "tool": "<name>"}``
       - ``{"type": "tool_end", "tool": "<name>"}``
-      - ``{"type": "text", "content": "<partial text>"}``
       - ``{"type": "result", "data": <AgentResponse dict>}``
       - ``{"type": "error", "message": "..."}``
     """
@@ -146,6 +137,7 @@ def invoke_agent_stream(
         return
 
     content_type = response.get("contentType", "")
+    logger.info("AgentCore response contentType: %s", content_type)
 
     if "text/event-stream" not in content_type:
         # Non-streaming response — parse and yield as single result
@@ -153,66 +145,107 @@ def invoke_agent_stream(
         yield {"type": "result", "data": parsed}
         return
 
-    # Stream processing — yield intermediate tool events
+    # --- Stream processing ---
+    # The entrypoint yields dicts.  AgentCore Runtime serializes each
+    # dict as a JSON string in an SSE "data: <json>" line.
+    # We use chunk_size=10 (per official AWS docs) to ensure lines
+    # are split correctly.
     decoder = codecs.getincrementaldecoder("utf-8")("ignore")
-    text_buf: list[str] = []
-    captured_result: dict[str, Any] | None = None
-    current_tool: str | None = None
+    final_response: dict[str, Any] | None = None
+    raw_chunks: list[str] = []
+    line_count = 0
 
-    for line in response["response"].iter_lines(chunk_size=4096):
+    for line in response["response"].iter_lines(chunk_size=10):
         if not line:
             continue
         decoded = decoder.decode(line if isinstance(line, bytes) else line.encode())
-        if decoded.startswith("data: "):
-            decoded = decoded[6:]
-        text_buf.append(decoded)
+        line_count += 1
 
-        # Detect tool_start events
-        tool_match = _TOOL_USE_START_RE.search(decoded)
-        if tool_match:
-            tool_name = tool_match.group(1)
-            current_tool = tool_name
-            yield {"type": "tool_start", "tool": tool_name}
+        # Log first few lines for debugging
+        if line_count <= 10:
+            logger.info("SSE line %d: %s", line_count, decoded[:300])
+
+        raw_chunks.append(decoded)
+
+        # Strip SSE prefix if present
+        stripped = decoded.strip()
+        if stripped.startswith("data: "):
+            stripped = stripped[6:]
+        if not stripped:
             continue
 
-        # Detect tool_result events (tool finished)
-        if _TOOL_RESULT_RE.search(decoded) and current_tool:
-            yield {"type": "tool_end", "tool": current_tool}
-            current_tool = None
+        # Try to parse as JSON
+        try:
+            obj = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            # Not valid JSON on its own — try accumulated chunks
             continue
 
-        # Try to parse accumulated content as complete AgentResponse
-        if captured_result is None:
-            raw = "".join(text_buf)
-            try:
-                result = json.loads(raw)
-                if isinstance(result, dict) and "status" in result:
-                    captured_result = result
-                    logger.info(
-                        "Captured complete AgentResponse (stream), draining"
-                    )
-            except (json.JSONDecodeError, ValueError):
-                continue
+        if not isinstance(obj, dict):
+            continue
+
+        # Route based on event type
+        evt_type = obj.get("type", "")
+
+        if evt_type in ("tool_start", "tool_end"):
+            yield obj
+            continue
+
+        # If it has "status" key, it's the final AgentResponse
+        if "status" in obj:
+            final_response = obj
+            continue
 
     # Flush decoder
     tail = decoder.decode(b"", final=True)
     if tail:
-        text_buf.append(tail)
+        raw_chunks.append(tail)
 
-    # Close any open tool
-    if current_tool:
-        yield {"type": "tool_end", "tool": current_tool}
+    logger.info(
+        "SSE stream ended: %d lines, final_response=%s",
+        line_count, final_response is not None,
+    )
 
-    if captured_result is not None:
-        yield {"type": "result", "data": captured_result}
-        return
+    # If no final_response found from line-by-line parsing,
+    # try to parse the entire accumulated stream as one JSON blob
+    if final_response is None and raw_chunks:
+        full_text = "".join(raw_chunks).strip()
+        # Remove any SSE "data: " prefixes
+        if full_text.startswith("data: "):
+            full_text = full_text[6:]
 
-    # Fallback
-    raw = "".join(text_buf)
-    try:
-        yield {"type": "result", "data": json.loads(raw)}
-    except (json.JSONDecodeError, ValueError):
-        yield {"type": "result", "data": {"status": "completed", "result": raw}}
+        logger.info("Attempting full-text parse, length=%d, preview=%.200s", len(full_text), full_text)
+
+        try:
+            obj = json.loads(full_text)
+            if isinstance(obj, dict) and "status" in obj:
+                final_response = obj
+        except (json.JSONDecodeError, ValueError):
+            # Try extracting JSON objects from the accumulated text
+            # The stream may contain multiple JSON objects concatenated
+            for chunk in raw_chunks:
+                chunk = chunk.strip()
+                if chunk.startswith("data: "):
+                    chunk = chunk[6:]
+                try:
+                    obj = json.loads(chunk)
+                    if isinstance(obj, dict):
+                        if "status" in obj:
+                            final_response = obj
+                        elif obj.get("type") in ("tool_start", "tool_end"):
+                            yield obj
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+    if final_response is not None:
+        yield {"type": "result", "data": final_response}
+    else:
+        logger.error(
+            "No AgentResponse found in stream. Lines=%d, raw_preview=%.500s",
+            line_count,
+            "".join(raw_chunks)[:500] if raw_chunks else "(empty)",
+        )
+        yield {"type": "error", "message": "Agent stream ended without a response"}
 
 
 def invoke_approval(

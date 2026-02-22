@@ -8,6 +8,7 @@ Requirements: 7.4
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -16,6 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from web_dashboard.routers import auth, chat
+
+# Ensure agentcore_client logs are visible in uvicorn console
+logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
 
 _BASE_DIR = Path(__file__).resolve().parent
 
